@@ -28,6 +28,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
+view-cameras = "scripts.view_cameras:main"
 setup-can = "scripts.setup_can:main"
 setup-cameras = "scripts.cameras:main"
 calibrate-gripper = "scripts.calibrate:main"

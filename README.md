@@ -92,6 +92,18 @@ The scripts enable automatic exposure on MJPEG ultrawides to avoid stale manual 
 The check runs all three cameras concurrently for 15 seconds, prints measured rates,
 and saves `outputs/report.json`. It fails outside 29–31 FPS. This tests capture, not inference.
 
+## Live camera view
+
+From a terminal on the robot's graphical desktop, with the hardware values exported:
+
+```bash
+uv run view-cameras
+```
+
+One window shows **left | top (RealSense) | right** side by side at 30 FPS.
+The views keep their original aspect ratios. Press **Q**, **Esc**, or close the window to quit.
+Stop other camera programs first. A headless terminal fails before opening the cameras.
+
 ## Calibrate grippers
 
 This enables one arm and moves its gripper. Keep the workspace clear and supervise it.
