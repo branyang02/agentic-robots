@@ -1,0 +1,39 @@
+[project]
+name = "agentic-robots"
+version = "0.1.0"
+description = "Minimal dual-YAM hardware setup."
+requires-python = ">=3.11"
+dependencies = [
+  "i2rt @ git+https://github.com/AfterQuery-Research/i2rt.git@7ed46f4e4e316133a0c39aa6cf34a73d2718e850",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.15.6", "pytest>=8.4"]
+
+[tool.uv]
+build-constraint-dependencies = ["scikit-build-core<0.10"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+setup-can = "scripts.setup_can:main"
+setup-cameras = "scripts.cameras:main"
+calibrate-gripper = "scripts.calibrate:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
