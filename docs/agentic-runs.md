@@ -81,7 +81,7 @@ uv run robot-init --thread-id YOUR_CONVERSATION_ID
 ```
 
 The command checks recorder availability, sends the
-[canonical setup prompt](../scripts/robot_agent.md) plus the repository path and
+[canonical setup prompt](../src/agentic_robots/robot_agent.md) plus the repository path and
 endpoint to that existing conversation, and waits for an exact acknowledgment.
 The agent replies `Robot ready [init:…]` and waits. Initialization does not start
 capture, enable motors, or move the arms. Its receipt, including the exact prompt,
@@ -158,7 +158,8 @@ MCP tools. The initializer supplies a CLI command with the correct endpoint, so 
 existing conversation can work even when its tool catalog cannot reload. CLI results
 contain absolute image paths for the agent to inspect; native MCP returns image
 blocks. Numerical action parameters are JSON arguments, not command-line flags.
-All command-line configuration uses tyro `Args`/`CallArgs` dataclasses.
+All command-line configuration uses tyro `Args` dataclasses in the corresponding
+files under `scripts/`.
 
 ## Recordings and failures
 
@@ -196,6 +197,8 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pytest
 ```
+
+To defer end-to-end workflows, use `uv run pytest -m 'not e2e'`.
 
 The default suite uses mocks or simulated arms and a fake desktop. HTTP subprocesses
 forbid CAN sockets; video tests use real FFmpeg and synthetic camera streams. Tests

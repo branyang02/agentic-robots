@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 
-from scripts.robot_bridge import Bridge
+from agentic_robots.bridge import Bridge
 from tests.robot_fakes import FakeArm, ManualClock
 
 

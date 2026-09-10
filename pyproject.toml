@@ -24,6 +24,7 @@ select = ["E", "F", "I"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = ["e2e: complete simulated robot workflows or the opt-in Codex round trip"]
 
 [build-system]
 requires = ["hatchling"]
@@ -34,13 +35,13 @@ view-cameras = "scripts.view_cameras:main"
 setup-can = "scripts.setup_can:main"
 setup-cameras = "scripts.cameras:main"
 calibrate-gripper = "scripts.calibrate:main"
-robot-bridge = "scripts.robot_mcp:main"
-robot-call = "scripts.robot_mcp:call_main"
+robot-bridge = "scripts.robot_bridge:main"
+robot-call = "scripts.robot_call:main"
 robot-record = "scripts.robot_record:main"
 robot-init = "scripts.robot_init:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["scripts"]
+packages = ["src/agentic_robots", "scripts"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

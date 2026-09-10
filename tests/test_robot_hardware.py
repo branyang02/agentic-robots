@@ -5,8 +5,8 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from scripts.robot_bridge import Bridge
-from scripts.robot_hardware import Hardware, enable_once
+from agentic_robots.bridge import Bridge
+from agentic_robots.hardware import Hardware, enable_once
 
 
 def test_session_requires_support_and_explicit_release():
@@ -78,12 +78,12 @@ def make_hardware():
 
 def test_cached_feedback_age_and_temporary_lock_contention(monkeypatch):
     h = make_hardware()
-    monkeypatch.setattr("scripts.robot_hardware.time.monotonic", lambda: 1)
+    monkeypatch.setattr("agentic_robots.hardware.time.monotonic", lambda: 1)
     assert h.read()["feedback_age_s"] == 0
     h.robot._state_lock.acquire()
-    monkeypatch.setattr("scripts.robot_hardware.time.monotonic", lambda: 1.02)
+    monkeypatch.setattr("agentic_robots.hardware.time.monotonic", lambda: 1.02)
     assert h.read()["feedback_age_s"] == pytest.approx(0.02)
-    monkeypatch.setattr("scripts.robot_hardware.time.monotonic", lambda: 1.2)
+    monkeypatch.setattr("agentic_robots.hardware.time.monotonic", lambda: 1.2)
     assert h.read()["feedback_age_s"] == pytest.approx(0.2)
 
 
@@ -160,11 +160,11 @@ def test_release_failure_keeps_session_available_for_inspection():
 
 def test_concurrent_feedback_reader_returns_aged_cache(monkeypatch):
     h = make_hardware()
-    monkeypatch.setattr("scripts.robot_hardware.time.monotonic", lambda: 1)
+    monkeypatch.setattr("agentic_robots.hardware.time.monotonic", lambda: 1)
     h.read()
     h.read_lock.acquire()
     try:
-        monkeypatch.setattr("scripts.robot_hardware.time.monotonic", lambda: 1.2)
+        monkeypatch.setattr("agentic_robots.hardware.time.monotonic", lambda: 1.2)
         assert h.read()["feedback_age_s"] == pytest.approx(0.2)
     finally:
         h.read_lock.release()
@@ -181,16 +181,16 @@ def test_hardware_identity_ownership_and_gripper_settings(tmp_path, monkeypatch)
     monkeypatch.setenv("LEFT_CAN", "test-adapter")
     serial = f"pytest-{tmp_path.name}"
     row = {"name": "fake-can", "serial": serial}
-    monkeypatch.setattr("scripts.robot_hardware.inventory", lambda: [])
-    monkeypatch.setattr("scripts.robot_hardware.resolve", lambda *args: row)
-    monkeypatch.setattr("scripts.robot_hardware.ready", lambda row: True)
+    monkeypatch.setattr("agentic_robots.hardware.inventory", lambda: [])
+    monkeypatch.setattr("agentic_robots.hardware.resolve", lambda *args: row)
+    monkeypatch.setattr("agentic_robots.hardware.ready", lambda row: True)
     calibration = tmp_path / "calibration"
     calibration.mkdir()
     file = calibration / "test.json"
     file.write_text(json.dumps({"left": {"adapter_serial": "wrong", "gripper_limits": [0, -5]}}))
     bus = MagicMock()
     bus.return_value.__enter__.return_value.recv.return_value = None
-    monkeypatch.setattr("scripts.robot_hardware.can.Bus", bus)
+    monkeypatch.setattr("agentic_robots.hardware.can.Bus", bus)
     factory = Mock(return_value=Mock())
     monkeypatch.setattr(i2rt.robots.get_robot, "get_yam_robot", factory)
     with pytest.raises(ValueError, match="mismatch"):

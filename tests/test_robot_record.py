@@ -12,8 +12,9 @@ import pytest
 from mcp import Client
 from PIL import Image
 
-from scripts.robot_bridge import Action
-from scripts.robot_record import ORDER, RecordingBridge, Rollout, recording_server
+from agentic_robots.bridge import Action
+from agentic_robots.recording import ORDER, RecordingBridge, Rollout
+from scripts.robot_record import recording_server
 from tests.test_robot_http import http_robot  # noqa: F401
 
 
@@ -27,7 +28,7 @@ def cameras():
 @pytest.fixture
 def rollout(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "scripts.robot_record.upstream_call",
+        "agentic_robots.recording.upstream_call",
         Mock(
             return_value={
                 "arms": {"left": {"joints_rad": [0] * 6}},
@@ -81,7 +82,7 @@ def test_actions_forward_unchanged_and_preserve_rejection(rollout, monkeypatch):
     ready_fake(rollout)
     rejection = {"status": "rejected", "error": {"code": "joint_limits", "details": {"joint": 1}}}
     upstream = Mock(return_value=rejection)
-    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     action = Action(arm="left", kind="joint_target", joints_rad=[4, 0, 0, 0, 0, 0])
     assert RecordingBridge(rollout).execute(action) == rejection
     upstream.assert_called_once_with(
@@ -96,7 +97,7 @@ def test_actions_forward_unchanged_and_preserve_rejection(rollout, monkeypatch):
 def test_transport_failure_is_recorded_without_automatic_retry(rollout, monkeypatch):
     ready_fake(rollout)
     upstream = Mock(side_effect=RuntimeError("connection lost"))
-    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     result = RecordingBridge(rollout).execute(
         Action(arm="left", kind="joint_target", joints_rad=[0] * 6)
     )
@@ -110,7 +111,7 @@ def test_dead_capture_does_not_forward_actions_but_stop_still_works(rollout, mon
     ready_fake(rollout)
     rollout.process.poll.return_value = 1
     upstream = Mock(return_value={"status": "stop requested; torque is not released"})
-    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     bridge = RecordingBridge(rollout)
     result = bridge.execute(Action(arm="left", kind="joint_target", joints_rad=[0] * 6))
     assert result["error"]["code"] == "recording_unavailable"
@@ -131,7 +132,7 @@ def test_finish_during_action_preserves_capture_and_hold(rollout):
 def test_idle_recorder_uses_no_cameras_and_reports_how_to_start(tmp_path, monkeypatch):
     camera_factory = Mock(side_effect=AssertionError("must not open cameras"))
     upstream = Mock(return_value={"arms": {}, "faults": {}, "errors": {}})
-    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     bridge = RecordingBridge(output_root=tmp_path / "absent", cameras=camera_factory)
     assert bridge.recording("status") == {"status": "idle", "ready": False}
     assert bridge.recording("finish")["status"] == "idle"
@@ -156,7 +157,7 @@ def test_completed_recordings_stay_unchanged_during_idle_calls(rollout, monkeypa
     before = {p: p.read_bytes() for p in rollout.output.rglob("*") if p.is_file()}
     current = {"arms": {"left": {"joints_rad": [0.2, 0, 0, 0, 0, 0]}}}
     upstream = Mock(return_value=current)
-    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     bridge = RecordingBridge(rollout)
 
     observation = bridge.observe()
@@ -201,7 +202,7 @@ def test_log_failure_does_not_block_stop_or_status(rollout, monkeypatch):
     ready_fake(rollout)
     monkeypatch.setattr(rollout, "event", Mock(side_effect=OSError("disk full")))
     upstream = Mock(return_value={"status": "completed"})
-    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     for operation in ("stop", "status"):
         result = RecordingBridge(rollout).session(operation)
         assert upstream.call_args.args[2]["operation"] == operation
@@ -214,7 +215,7 @@ def test_event_write_failure_does_not_send_an_unlogged_action(rollout, monkeypat
     (rollout.output / "events.jsonl").unlink()
     (rollout.output / "events.jsonl").mkdir()
     upstream = Mock()
-    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     result = RecordingBridge(rollout).execute(
         Action(arm="left", kind="joint_target", joints_rad=[0] * 6)
     )
@@ -235,7 +236,7 @@ def test_response_log_failure_preserves_the_actual_controller_result(rollout, mo
 
     monkeypatch.setattr(rollout, "event", event)
     monkeypatch.setattr(
-        "scripts.robot_record.upstream_call",
+        "agentic_robots.recording.upstream_call",
         Mock(return_value={"status": "completed", "actual": {"q": 0}}),
     )
     result = RecordingBridge(rollout).execute(
@@ -318,6 +319,7 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout):
     assert rollout.finish()["status"] == "finished"
 
 
+@pytest.mark.e2e
 def test_mcp_recorded_rollout_against_http_robot_preserves_hold(http_robot, tmp_path):  # noqa: F811
     call, command, controller, _ = http_robot
     cmd, _ = command("session", {"operation": "status"})
@@ -389,6 +391,7 @@ def test_unexpected_encoder_exit_is_reported_as_failed(rollout):
     assert "before finish" in result["error"]
 
 
+@pytest.mark.e2e
 def test_http_cli_recorder_shutdown_does_not_stop_controller(http_robot, tmp_path):  # noqa: F811
     call, command, controller, root = http_robot
     cmd, _ = command("session", {"operation": "status"})
@@ -405,7 +408,8 @@ def test_http_cli_recorder_shutdown_does_not_stop_controller(http_robot, tmp_pat
         "  if family==socket.AF_CAN: raise RuntimeError('CAN forbidden in test')\n"
         "  super().__init__(family,*a,**kw)\n"
         "socket.socket=NoCAN\n"
-        "from scripts.robot_record import Rollout,RecordingBridge,recording_server\n"
+        "from agentic_robots.recording import Rollout,RecordingBridge\n"
+        "from scripts.robot_record import recording_server\n"
         f'r=Rollout({str(output)!r},"HTTP recording test",{cameras()!r},{upstream!r})\n'
         "try:\n"
         " r.start()\n"

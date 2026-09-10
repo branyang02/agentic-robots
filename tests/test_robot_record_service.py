@@ -13,6 +13,8 @@ import pytest
 from tests.test_robot_http import http_robot  # noqa: F401
 from tests.test_robot_record import cameras, frame
 
+pytestmark = pytest.mark.e2e
+
 
 @pytest.fixture
 def http_recorder(http_robot, tmp_path):  # noqa: F811
@@ -31,8 +33,9 @@ def http_recorder(http_robot, tmp_path):  # noqa: F811
         "  if family==socket.AF_CAN: raise RuntimeError('CAN forbidden in test')\n"
         "  super().__init__(family,*a,**kw)\n"
         "socket.socket=NoCAN\n"
+        "from agentic_robots import recording\n"
         "from scripts import robot_record\n"
-        f"robot_record.configured_cameras=lambda:{cameras()!r}\n"
+        f"recording.configured_cameras=lambda:{cameras()!r}\n"
         "robot_record.main()\n"
     )
     log = (tmp_path / "recorder-service.log").open("w")

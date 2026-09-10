@@ -4,6 +4,7 @@ import asyncio
 import json
 import socket
 import uuid
+from importlib.resources import files
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -12,8 +13,9 @@ from mcp import Client
 from mcp.server import MCPServer
 from mcp.types import CallToolResult, TextContent
 
+from agentic_robots import codex
+from agentic_robots.mcp import structured
 from scripts import robot_init
-from scripts.robot_mcp import structured
 
 
 @pytest.fixture
@@ -57,7 +59,7 @@ def setup(tmp_path, monkeypatch):
         ]
         return CallToolResult(content=[TextContent(type="text", text='{"status":"sent"}')])
 
-    async def locate_app(_):
+    async def locate_app(**kwargs):
         return app
 
     monkeypatch.setattr(robot_init, "locate_app", locate_app)
@@ -89,7 +91,7 @@ def test_initializer_sends_one_prompt_and_confirms_agent_ack_without_motion(
     assert calls == ["status"]
     receipt = json.loads(Path(result["receipt"]).read_text())
     assert receipt["prompt"] == sent[0]
-    assert Path(robot_init.__file__).with_name("robot_agent.md").read_text() in sent[0]
+    assert files("agentic_robots").joinpath("robot_agent.md").read_text() in sent[0]
     assert receipt["turn_id"] == "ack-turn"
     assert "Do not run a robot task" in sent[0]
     assert str(args.repo) in sent[0] and args.url in sent[0]
@@ -210,7 +212,7 @@ def test_explicit_desktop_adapter_and_pipe(tmp_path):
     (tmp_path / "scripts/launch_codex_app_tools_mcp").touch()
     (tmp_path / "server.mjs").touch()
     args = robot_init.Args("unused", app_tools=tmp_path, app_pipe=tmp_path / "desktop.sock")
-    transport = robot_init.app_transport(args)
+    transport = codex.app_transport(args.app_pipe, args.app_tools)
     assert transport.command == str(tmp_path / "scripts/launch_codex_app_tools_mcp")
     assert transport.env["CODEX_APP_TOOLS_PIPE_PATH"] == str(args.app_pipe)
 
@@ -220,7 +222,7 @@ def test_discovery_distinguishes_browser_sockets_and_rejects_ambiguity(
     tmp_path, monkeypatch, ambiguous
 ):
     monkeypatch.delenv("CODEX_APP_TOOLS_PIPE_PATH", raising=False)
-    monkeypatch.setattr(robot_init.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(codex.tempfile, "gettempdir", lambda: str(tmp_path))
     directory = tmp_path / "codex-browser-use"
     directory.mkdir()
     app, browser = MCPServer("app"), MCPServer("browser")
@@ -234,9 +236,9 @@ def test_discovery_distinguishes_browser_sockets_and_rejects_ambiguity(
         pass
 
     monkeypatch.setattr(
-        robot_init,
+        codex,
         "app_transport",
-        lambda args: app if args.app_pipe.name == "app.sock" or ambiguous else browser,
+        lambda pipe, tools: app if pipe.name == "app.sock" or ambiguous else browser,
     )
     with socket.socket(socket.AF_UNIX) as a, socket.socket(socket.AF_UNIX) as b:
         a.bind(str(directory / "app.sock"))
@@ -245,9 +247,9 @@ def test_discovery_distinguishes_browser_sockets_and_rejects_ambiguity(
         b.listen()
         if ambiguous:
             with pytest.raises(RuntimeError, match="Could not select one"):
-                asyncio.run(robot_init.locate_app(robot_init.Args("unused")))
+                asyncio.run(codex.locate_app())
         else:
-            assert asyncio.run(robot_init.locate_app(robot_init.Args("unused"))) is app
+            assert asyncio.run(codex.locate_app()) is app
 
 
 def test_prompt_is_packaged_and_quotes_shell_paths(tmp_path):

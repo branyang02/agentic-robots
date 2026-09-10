@@ -11,8 +11,8 @@ Consult the [official uv docs](https://docs.astral.sh/uv/) for uv behavior and o
 
 For robot operation, initialize the conversation with `robot-init` as described in
 `docs/agentic-runs.md`. The canonical initialization prompt is
-`scripts/robot_agent.md`; keep behavioral instructions there instead of duplicating
-them across repository files. A task message in the initialized conversation starts
+`src/agentic_robots/robot_agent.md`; keep behavioral instructions there instead of
+duplicating them across repository files. A task message in the initialized conversation starts
 the observe / reason / execute / evaluate loop and its recording.
 
 Never kill/restart a controller holding enabled arms or drop torque to install a

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import tyro
 
-from scripts.cameras import auto_exposure, configured_cameras, input_args
+from agentic_robots.cameras import auto_exposure, configured_cameras, input_args
 
 ORDER = ("left", "top", "right")
 

@@ -12,9 +12,32 @@ from unittest.mock import patch
 import can
 import numpy as np
 
-from scripts.setup_can import inventory, ready, resolve
+from agentic_robots.can import inventory, ready, resolve
 
 STARTUP_LOCK = threading.Lock()
+
+
+def close_robot(robot):
+    """Work around the pinned i2rt version closing CAN before its motor thread exits."""
+    chain = robot.motor_chain
+    motor_threads = [
+        thread
+        for thread in threading.enumerate()
+        if getattr(getattr(thread, "_target", None), "__self__", None) is chain
+    ]
+    deadline = time.monotonic() + 5
+
+    def join(thread):
+        thread.join(timeout=max(0, deadline - time.monotonic()))
+        if thread.is_alive():
+            raise RuntimeError(f"Timed out stopping {thread.name}; CAN socket was left open")
+
+    robot._stop_event.set()
+    join(robot._server_thread)
+    chain.running = False
+    for thread in motor_threads:
+        join(thread)
+    robot.close()
 
 
 def enable_once(interface, motor_id, motor_type, reset_communication):
@@ -165,7 +188,5 @@ class Hardware:
             robot._command_lock.release()
 
     def close(self):
-        from scripts.calibrate import close_robot
-
         close_robot(self.robot)
         self.lock.close()

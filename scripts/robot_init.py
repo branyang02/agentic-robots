@@ -3,22 +3,19 @@
 import asyncio
 import json
 import math
-import os
 import shlex
-import shutil
-import socket
-import stat
 import sys
-import tempfile
 import time
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import tyro
-from mcp import Client, StdioServerParameters
-from mcp.types import RequestParamsMeta
+from mcp import Client
+
+from agentic_robots.codex import app_call, error_message, locate_app
 
 
 @dataclass
@@ -39,89 +36,6 @@ class Args:
     """Maximum wait for the initialization acknowledgment."""
 
 
-def app_transport(args):
-    """Reuse the desktop's bundled MCP adapter; never resume a parallel CLI session."""
-    pipe = args.app_pipe or os.environ.get("CODEX_APP_TOOLS_PIPE_PATH")
-    if pipe is None:
-        raise ValueError("An app socket is required")
-    resources = []
-    if binary := shutil.which("codex"):
-        resources.append(Path(binary).resolve().parent)
-    resources += [
-        Path("/usr/lib/chatgpt/resources"),
-        Path("/Applications/Codex.app/Contents/Resources"),
-    ]
-    plugins = (
-        [args.app_tools]
-        if args.app_tools
-        else [p / "plugins/openai-bundled/plugins/codex-app-tools" for p in resources]
-    )
-    if not args.app_tools:
-        plugins += sorted(
-            (Path.home() / ".codex/plugins/cache/openai-bundled/codex-app-tools").glob("*"),
-            reverse=True,
-        )
-    for plugin in plugins:
-        launcher = plugin / "scripts/launch_codex_app_tools_mcp"
-        server = plugin / "server.mjs"
-        if launcher.is_file() and server.is_file():
-            env = {
-                key: value
-                for key, value in os.environ.items()
-                if key in {"CODEX_MCP_NODE_PATH", "CODEX_CLI_PATH", "CODEX_ELECTRON_RESOURCES_PATH"}
-            }
-            env["CODEX_APP_TOOLS_PIPE_PATH"] = str(pipe)
-            return StdioServerParameters(command=str(launcher), args=[str(server)], env=env)
-    raise RuntimeError("Codex app tools were not found; supply --app-tools <plugin directory>")
-
-
-async def locate_app(args):
-    if args.app_pipe or os.environ.get("CODEX_APP_TOOLS_PIPE_PATH"):
-        return app_transport(args)
-    matches = []
-    for path in (Path(tempfile.gettempdir()) / "codex-browser-use").glob("*.sock"):
-        try:
-            info = path.stat()
-            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
-                continue
-            with socket.socket(socket.AF_UNIX) as connection:
-                connection.settimeout(0.2)
-                connection.connect(str(path))
-            transport = app_transport(replace(args, app_pipe=path))
-            async with Client(transport, read_timeout_seconds=2) as client:
-                catalog = await client.list_tools()
-                if {"read_thread", "send_message_to_thread"} <= {t.name for t in catalog.tools}:
-                    matches.append(transport)
-        except Exception:
-            # This directory also contains browser sockets, not just Codex app tools.
-            continue
-    if len(matches) != 1:
-        raise RuntimeError(
-            "Could not select one Codex app-tools socket. Open Codex desktop or "
-            "supply --app-pipe and --app-tools for your installation."
-        )
-    return matches[0]
-
-
-async def app_call(client, thread_id, tool, arguments):
-    result = await client.call_tool(
-        tool, arguments, meta=RequestParamsMeta(**{"openai/threadId": thread_id})
-    )
-    messages = [item.text for item in result.content if hasattr(item, "text")]
-    if result.is_error:
-        raise RuntimeError("Codex app rejected the request: " + "\n".join(messages))
-    if len(messages) != 1:
-        raise RuntimeError("Unexpected Codex app response; check the desktop adapter version")
-    return json.loads(messages[0])
-
-
-def error_message(exc):
-    # MCP transports may wrap a useful error in several AnyIO task groups.
-    if isinstance(exc, BaseExceptionGroup):
-        return "; ".join(error_message(child) for child in exc.exceptions)
-    return str(exc)
-
-
 def bootstrap(args, acknowledgment, acknowledgment_file=None):
     repo = args.repo.resolve()
     command = shlex.join(["uv", "run", "robot-call", "--url", args.url])
@@ -131,7 +45,7 @@ def bootstrap(args, acknowledgment, acknowledgment_file=None):
         f"Run tool commands from {shlex.quote(str(repo))}:\n{command}\n"
         f"Physical startup support authorized by the initializer: {args.startup_supported}.\n\n"
     )
-    instructions = Path(__file__).with_name("robot_agent.md").read_text()
+    instructions = files("agentic_robots").joinpath("robot_agent.md").read_text(encoding="utf-8")
     confirmation = (
         "Before replying, write the exact acknowledgment below as UTF-8 text to "
         f"{str(acknowledgment_file)!r}. This confirms delivery when the desktop omits message "
@@ -170,7 +84,9 @@ async def initialize(args):
     receipt = args.repo.resolve() / "outputs/robot-init" / (args.thread_id + ".json")
     acknowledgment_file = receipt.with_suffix(f".{nonce}.ack")
     prompt = bootstrap(args, token, acknowledgment_file)
-    async with Client(await locate_app(args), read_timeout_seconds=30) as app:
+    async with Client(
+        await locate_app(app_pipe=args.app_pipe, app_tools=args.app_tools), read_timeout_seconds=30
+    ) as app:
         current = await app_call(
             app,
             args.thread_id,

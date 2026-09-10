@@ -10,6 +10,20 @@ Python 3.11, uv, Ruff, pytest. Hardware uses i2rt pinned to
 `7ed46f4e4e316133a0c39aa6cf34a73d2718e850`; MCP exposes tools to the agent.
 Camera tools use FFmpeg and V4L2.
 
+## Project layout
+
+```text
+scripts/                  # Runnable programs: Args, main, workflow, and service lifecycle
+src/agentic_robots/        # Reusable control, hardware, camera, recording, and transport code
+  robot_agent.md          # Canonical agent instructions, included in the installed package
+tests/                    # Unit, integration, and opt-in Codex tests
+```
+
+Console commands in `pyproject.toml` point directly to the corresponding modules in
+`scripts/`. These modules compose library components and run each program; reusable
+code imports from `agentic_robots` and never imports from `scripts`. The initializer
+owns prompt delivery and acknowledgment; the library provides the desktop transport.
+
 ## Install (Ubuntu)
 
 Run from this repository:
@@ -233,8 +247,8 @@ this way. `recoverable` means recovery may be attempted; `retryable` remains fal
 for actions while the fault is latched. Recovery needs the existing arm session and
 uses the same per-arm lock as execution; it does not require release or startup.
 
-The current Codex conversation is the agent. `scripts/robot_agent.md` describes the loop: choose
-when to observe, reason about a target and duration, execute, and assess the returned
+The current Codex conversation is the agent. `src/agentic_robots/robot_agent.md` describes
+the loop: choose when to observe, reason about a target and duration, execute, and assess the returned
 feedback. There is no separate reasoning model, fixed task routine, human-assessment
 step, or per-action approval. For example, start with the prompt:
 
@@ -245,7 +259,7 @@ Every task includes returning both arms to neutral, even if the task message omi
 it. The agent verifies fresh measured joints and images before declaring completion.
 On this setup, verified neutral is the resting pose where power can be cut; an
 interrupted or failed task does not establish that state. Power removal remains an
-explicit user action. See the [agent instructions](scripts/robot_agent.md).
+explicit user action. See the [agent instructions](src/agentic_robots/robot_agent.md).
 
 Client disconnect does not release torque and may let an action finish. Use session
 stop to interrupt it. Only `{"operation":"release","arm":"left","supported":true}`

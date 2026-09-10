@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from scripts.calibrate import save_limits
-from scripts.cameras import configured_cameras, input_args
-from scripts.setup_can import ready, resolve
+from agentic_robots.calibration import save_limits
+from agentic_robots.cameras import configured_cameras, input_args
+from agentic_robots.can import ready, resolve
 
 
 def test_serial_resolution_survives_interface_renumbering():
@@ -62,7 +62,7 @@ def test_shutdown_waits_for_inflight_can_io():
     import threading
     from types import SimpleNamespace
 
-    from scripts.calibrate import close_robot
+    from agentic_robots.hardware import close_robot
 
     entered = threading.Event()
     release = threading.Event()

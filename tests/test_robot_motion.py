@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from scripts.robot_bridge import IK_POSITION_TOLERANCE, IK_ROTATION_TOLERANCE, Action, Motion
+from agentic_robots.bridge import IK_POSITION_TOLERANCE, IK_ROTATION_TOLERANCE, Action, Motion
 
 
 @pytest.fixture

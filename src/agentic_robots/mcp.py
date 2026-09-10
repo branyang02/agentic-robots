@@ -1,36 +1,14 @@
-"""Local MCP tools for the current Codex agent; no LLM API or second agent."""
+"""Shared MCP tool definitions and structured robot responses."""
 
 import asyncio
 import base64
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import tyro
-from mcp import Client
-from mcp.server import MCPServer
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-from scripts.robot_bridge import Action, Bridge, json_ready, write_result
-
-
-@dataclass
-class Args:
-    port: int = 8767
-    """Port for the local motor bridge's MCP server."""
-
-
-@dataclass
-class CallArgs:
-    tool: tyro.conf.Positional[Literal["observe", "execute", "session", "recording"]]
-    """MCP tool to call."""
-    arguments: Path | None = None
-    """JSON file containing tool arguments."""
-    output: Path | None = None
-    """Write the structured result to this JSON file."""
-    url: str = "http://127.0.0.1:8767/mcp"
-    """MCP endpoint for the bridge or recorder."""
+from agentic_robots.bridge import Action, json_ready
 
 
 def structured(value):
@@ -42,14 +20,8 @@ def structured(value):
     )
 
 
-def make_server(bridge):
-    server = MCPServer(
-        "robot",
-        instructions=(
-            "Local robot observation, action, and session tools. The calling agent supplies "
-            "targets and durations. Tool registration does not enable motors."
-        ),
-    )
+def register_robot_tools(server, bridge):
+    """Expose a controller or recording bridge through the same MCP action contract."""
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def observe() -> CallToolResult:
@@ -118,34 +90,3 @@ def make_server(bridge):
         return structured(
             await asyncio.to_thread(bridge.session, operation, arm, supported, reset_communication)
         )
-
-    return server
-
-
-def main():
-    args = tyro.cli(Args, description=__doc__)
-    make_server(Bridge()).run(transport="streamable-http", host="127.0.0.1", port=args.port)
-
-
-def call_main():
-    """Same MCP tools via CLI when the current Codex turn cannot reload its tool catalog."""
-    args = tyro.cli(CallArgs, description=call_main.__doc__)
-
-    async def call():
-        arguments = json.loads(args.arguments.read_text()) if args.arguments else {}
-        async with Client(args.url, read_timeout_seconds=3600) as client:
-            result = await client.call_tool(args.tool, arguments)
-            value = result.structured_content
-            if value is None:
-                value = {"error": [item.text for item in result.content if hasattr(item, "text")]}
-            if args.output:
-                write_result(args.output, value)
-            print(json.dumps(value))
-            if result.is_error:
-                raise SystemExit(1)
-
-    asyncio.run(call())
-
-
-if __name__ == "__main__":
-    main()

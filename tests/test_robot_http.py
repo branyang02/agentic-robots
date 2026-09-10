@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+pytestmark = pytest.mark.e2e
+
 
 @pytest.fixture
 def http_robot(tmp_path, request):
@@ -30,8 +32,8 @@ def http_robot(tmp_path, request):
         "  if family==socket.AF_CAN: raise RuntimeError('CAN forbidden in test')\n"
         "  super().__init__(family,*a,**kw)\n"
         "socket.socket=NoCAN\n"
-        "from scripts.robot_bridge import Bridge\n"
-        "from scripts.robot_mcp import make_server\n"
+        "from agentic_robots.bridge import Bridge\n"
+        "from scripts.robot_bridge import make_server\n"
         f"from tests.robot_fakes import {arm_type}\n"
         f"bridge=Bridge(lambda:({{'top':{str(image)!r}}},{{'camera:left':'offline'}}),arm_factory={arm_type})\n"
         f"make_server(bridge).run(transport='streamable-http',host='127.0.0.1',port={port})\n"

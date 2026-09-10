@@ -1,12 +1,15 @@
 import asyncio
 
 import numpy as np
+import pytest
 from mcp import Client
 from PIL import Image
 
-from scripts.robot_bridge import Bridge
-from scripts.robot_mcp import make_server
+from agentic_robots.bridge import Bridge
+from scripts.robot_bridge import make_server
 from tests.robot_fakes import FakeArm, ManualClock
+
+pytestmark = pytest.mark.e2e
 
 
 def test_mcp_session_observe_reject_revise_execute_return_and_reconnect(tmp_path):

@@ -14,10 +14,13 @@ from pathlib import Path
 import pytest
 from mcp import Client
 
-from scripts.robot_init import Args, app_call, locate_app
+from agentic_robots.codex import app_call, locate_app
 from tests.test_robot_http import http_robot  # noqa: F401
 from tests.test_robot_record import frame
 from tests.test_robot_record_service import http_recorder  # noqa: F401
+
+pytestmark = pytest.mark.e2e
+
 
 THREAD = os.environ.get("ROBOT_CODEX_E2E_THREAD_ID")
 
@@ -93,7 +96,6 @@ def assert_task_trace(log, number):
 @pytest.mark.parametrize("http_robot", ["TrackingSlipArm"], indirect=True)
 def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, monkeypatch):  # noqa: F811
     call, url, output, recorder, controller, root = http_recorder
-    args = Args(THREAD, repo=root, url=url, startup_supported=True)
     # Exercise the entire flow from an ordinary terminal, including follow-up task delivery.
     monkeypatch.delenv("CODEX_APP_TOOLS_PIPE_PATH", raising=False)
     initialized = subprocess.run(
@@ -120,7 +122,7 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, mo
     assert not output.exists(), "Initialization must not start capture or move hardware"
 
     async def task(prompt, number):
-        async with Client(await locate_app(args), read_timeout_seconds=60) as app:
+        async with Client(await locate_app(), read_timeout_seconds=60) as app:
             previous = await app_call(
                 app,
                 THREAD,

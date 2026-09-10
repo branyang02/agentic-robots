@@ -1,61 +1,21 @@
 """Calibrate one YAM gripper under supervision."""
 
-import json
-import math
 import os
-import shutil
-import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import tyro
 
-from scripts.setup_can import inventory, ready, resolve
+from agentic_robots.calibration import save_limits
+from agentic_robots.can import inventory, ready, resolve
+from agentic_robots.hardware import close_robot
 
 
 @dataclass
 class Args:
     side: tyro.conf.Positional[Literal["left", "right"]]
     """Arm whose gripper will be calibrated."""
-
-
-def save_limits(path, side, serial, limits):
-    values = [float(value) for value in limits]
-    if len(values) != 2 or not all(math.isfinite(v) for v in values) or values[0] == values[1]:
-        raise ValueError("Invalid gripper limits; calibration was not saved")
-    data = json.loads(path.read_text()) if path.exists() else {}
-    data[side] = {"adapter_serial": serial, "gripper_limits": values}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        shutil.copy2(path, path.with_suffix(f".{time.time_ns()}.bak"))
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(data, indent=2) + "\n")
-    temporary.replace(path)
-
-
-def close_robot(robot):
-    """Work around the pinned i2rt version closing CAN before its motor thread exits."""
-    chain = robot.motor_chain
-    motor_threads = [
-        thread
-        for thread in threading.enumerate()
-        if getattr(getattr(thread, "_target", None), "__self__", None) is chain
-    ]
-    deadline = time.monotonic() + 5
-
-    def join(thread):
-        thread.join(timeout=max(0, deadline - time.monotonic()))
-        if thread.is_alive():
-            raise RuntimeError(f"Timed out stopping {thread.name}; CAN socket was left open")
-
-    robot._stop_event.set()
-    join(robot._server_thread)
-    chain.running = False
-    for thread in motor_threads:
-        join(thread)
-    robot.close()
 
 
 def main():

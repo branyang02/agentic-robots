@@ -3,7 +3,7 @@ from unittest.mock import Mock
 import pytest
 from PIL import Image
 
-from scripts.robot_bridge import Bridge, camera_snapshot
+from agentic_robots.bridge import Bridge, camera_snapshot
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def test_camera_snapshot_tolerates_missing_configuration_and_capture_failure(mon
             raise RuntimeError("device busy")
         return {"preview": "/available.png"}
 
-    monkeypatch.setattr("scripts.robot_bridge.capture", capture)
+    monkeypatch.setattr("agentic_robots.bridge.capture", capture)
     paths, errors = camera_snapshot()
     assert paths == {"left": "/available.png"}
     assert errors["camera:right"] == "device busy"
