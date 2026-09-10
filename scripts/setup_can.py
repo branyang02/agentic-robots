@@ -1,10 +1,19 @@
 """List or configure Classic CAN without sending motor commands."""
 
-import argparse
 import json
 import os
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+import tyro
+
+
+@dataclass
+class Args:
+    command: tyro.conf.Positional[Literal["list", "setup"]]
+    """List CAN adapters or configure the two selected adapters."""
 
 
 def inventory():
@@ -56,9 +65,7 @@ def ready(row):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["list", "setup"])
-    args = parser.parse_args()
+    args = tyro.cli(Args, description=__doc__)
     rows = inventory()
     if args.command == "list":
         print(json.dumps(rows, indent=2))
