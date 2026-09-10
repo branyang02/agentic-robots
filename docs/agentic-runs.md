@@ -51,8 +51,7 @@ uv run --env-file .env robot-record --output-root outputs/rollouts --port 8768
 
 Keep both terminals running throughout the task.
 The controller starts disconnected and enables no motors until the agent starts
-an authorized session. Systemd is optional. For terminal disconnections, run these
-commands inside a persistent terminal session or use the background services below.
+an authorized session.
 
 The recorder starts **idle**: it opens no cameras and enables no motors. It creates
 a fresh directory and starts capture when the agent calls `recording(start, text)`.
@@ -64,42 +63,6 @@ After a task, the agent verifies both arms have returned to neutral and retains
 powered hold for the next task. For shutdown, request release after that verification,
 then stop the processes. An interrupted task does not establish neutral; do not
 close the controller's terminal while an arm still needs powered support.
-
-<details>
-<summary>Optional background services with systemd (Ubuntu)</summary>
-
-Use these instead of the terminal commands when you want background processes and
-journal logs. Start them only when no existing controller or recorder owns the hardware.
-
-```bash
-systemd-run --user --unit=agentic-robot-bridge \
-  --property="WorkingDirectory=$PWD" \
-  /bin/bash -c '
-set -e
-set -a
-source .env
-set +a
-exec uv run robot-bridge --port 8767
-'
-```
-
-Stop other camera viewers and launch the separate persistent recorder:
-
-```bash
-systemd-run --user --collect --unit=agentic-robot-record \
-  --property="WorkingDirectory=$PWD" \
-  /bin/bash -c '
-set -e
-set -a
-source .env
-set +a
-exec uv run robot-record --output-root outputs/rollouts --port 8768
-'
-```
-
-Inspect startup with `journalctl --user -u agentic-robot-record -n 30 --no-pager`.
-
-</details>
 
 Override the motor endpoint with `--upstream` when needed. During a recording, all
 observations and actions go through the recorder; it owns the three camera streams.
