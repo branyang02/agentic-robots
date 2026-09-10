@@ -1,15 +1,22 @@
 """Show left, top, and right cameras side by side on a graphical desktop."""
 
-import argparse
 import os
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
+
+import tyro
 
 from scripts.cameras import auto_exposure, configured_cameras, input_args
 
 ORDER = ("left", "top", "right")
+
+
+@dataclass
+class Args:
+    """The viewer uses the configured cameras and takes no options."""
 
 
 def require_display():
@@ -129,7 +136,7 @@ def view(cameras):
 
 
 def main():
-    argparse.ArgumentParser(description=__doc__).parse_args()
+    tyro.cli(Args, description=__doc__)
     try:
         require_display()  # Fail before opening cameras or changing camera controls.
         view(configured_cameras())
