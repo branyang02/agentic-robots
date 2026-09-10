@@ -133,6 +133,42 @@ def test_timeout_keeps_sent_receipt_without_resending(setup, monkeypatch):
     assert receipt["error"]
 
 
+@pytest.mark.parametrize("case", ["confirmed", "missing", "wrong", "active", "stale"])
+def test_omitted_desktop_messages_require_unique_receipt_and_new_completed_turn(
+    setup, monkeypatch, case
+):
+    args, state, sent, _ = setup
+    args.timeout_s = 0.001
+    if case == "stale":
+        state["turns"] = [{"id": "ack-turn", "status": "completed", "items": []}]
+    real_call = robot_init.app_call
+
+    async def omitted_reply(client, thread, tool, arguments):
+        result = await real_call(client, thread, tool, arguments)
+        if tool == "send_message_to_thread":
+            receipt = json.loads(
+                (args.repo / "outputs/robot-init" / (args.thread_id + ".json")).read_text()
+            )
+            if case != "missing":
+                Path(receipt["acknowledgment_file"]).write_text(
+                    "old acknowledgment" if case == "wrong" else receipt["acknowledgment"]
+                )
+            state["turns"][0]["items"] = []
+            if case == "active":
+                state["turns"][0]["status"] = "inProgress"
+        return result
+
+    monkeypatch.setattr(robot_init, "app_call", omitted_reply)
+    if case == "confirmed":
+        result = asyncio.run(robot_init.initialize(args))
+        assert result["status"] == "acknowledged"
+    else:
+        with pytest.RaisesGroup(TimeoutError, flatten_subgroups=True):
+            asyncio.run(robot_init.initialize(args))
+    assert len(sent) == 1
+    assert "write the exact acknowledgment" in sent[0]
+
+
 @pytest.mark.parametrize(
     "field,value", [("thread_id", "bad-id"), ("timeout_s", 0), ("url", "https://example.com/mcp")]
 )

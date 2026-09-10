@@ -122,7 +122,7 @@ def error_message(exc):
     return str(exc)
 
 
-def bootstrap(args, acknowledgment):
+def bootstrap(args, acknowledgment, acknowledgment_file=None):
     repo = args.repo.resolve()
     command = shlex.join(["uv", "run", "robot-call", "--url", args.url])
     context = (
@@ -132,12 +132,20 @@ def bootstrap(args, acknowledgment):
         f"Physical startup support authorized by the initializer: {args.startup_supported}.\n\n"
     )
     instructions = Path(__file__).with_name("robot_agent.md").read_text()
+    confirmation = (
+        "Before replying, write the exact acknowledgment below as UTF-8 text to "
+        f"{str(acknowledgment_file)!r}. This confirms delivery when the desktop omits message "
+        "text from its readback.\n"
+        if acknowledgment_file is not None
+        else ""
+    )
     return (
         context
         + instructions
         + (
             "\nThis message only initializes the conversation. Do not run a robot task, start a "
-            "recording, enable motors, or send actions. Acknowledge by replying exactly:\n"
+            "recording, enable motors, or send actions.\n"
+            f"{confirmation}Acknowledge by replying exactly:\n"
             f"{acknowledgment}\nThen wait for the user's task message.\n"
         )
     )
@@ -157,9 +165,11 @@ async def initialize(args):
         result = await robot.call_tool("recording", {"operation": "status"})
         if result.is_error or result.structured_content is None:
             raise RuntimeError("Recorder is unavailable; start robot-record first")
-    token = "Robot ready [init:" + uuid.uuid4().hex + "]"
-    prompt = bootstrap(args, token)
+    nonce = uuid.uuid4().hex
+    token = "Robot ready [init:" + nonce + "]"
     receipt = args.repo.resolve() / "outputs/robot-init" / (args.thread_id + ".json")
+    acknowledgment_file = receipt.with_suffix(f".{nonce}.ack")
+    prompt = bootstrap(args, token, acknowledgment_file)
     async with Client(await locate_app(args), read_timeout_seconds=30) as app:
         current = await app_call(
             app,
@@ -174,11 +184,13 @@ async def initialize(args):
             raise ValueError("Choose a local Codex conversation on this computer")
         if thread["status"]["type"] not in {"idle", "notLoaded"}:
             raise ValueError("Wait for the target conversation to become idle before initializing")
+        previous_turns = {turn["id"] for turn in current.get("turns", [])}
         record = {
             "thread_id": args.thread_id,
             "url": args.url,
             "prompt": prompt,
             "acknowledgment": token,
+            "acknowledgment_file": str(acknowledgment_file),
             "status": "sending",
             "created_unix": time.time(),
         }
@@ -206,12 +218,22 @@ async def initialize(args):
                     {"threadId": args.thread_id, "turnLimit": 1, "includeOutputs": False},
                 )
                 for turn in page.get("turns", []):
-                    if turn.get("status") == "completed" and any(
+                    if turn.get("id") in previous_turns or turn.get("status") != "completed":
+                        continue
+                    message_ack = any(
                         item.get("type") == "agentMessage"
                         and item.get("phase") in {"final", "final_answer"}
                         and item.get("text", "").strip() == token
                         for item in turn.get("items", [])
-                    ):
+                    )
+                    # Some desktop versions omit completed message items. Require the
+                    # agent's unique receipt AND a new completed turn in that case.
+                    file_ack = (
+                        not turn.get("items")
+                        and acknowledgment_file.is_file()
+                        and acknowledgment_file.read_text().strip() == token
+                    )
+                    if message_ack or file_ack:
                         record.update(status="acknowledged", turn_id=turn["id"])
                         save()
                         return {

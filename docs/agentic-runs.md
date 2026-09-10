@@ -84,6 +84,8 @@ endpoint to that existing conversation, and waits for an exact acknowledgment.
 The agent replies `Robot ready [init:…]` and waits. Initialization does not start
 capture, enable motors, or move the arms. Its receipt, including the exact prompt,
 acknowledgment, and turn ID, is saved in `outputs/robot-init/<conversation-id>.json`.
+The agent also writes a unique acknowledgment file there; when desktop readback
+omits message text, the initializer checks this file and a new completed turn.
 After updating the agent instructions, initialize an idle conversation again to
 load them; the hardware processes do not need a restart.
 
@@ -106,7 +108,8 @@ on the Linux desktop installation used for this repository. It does not fall bac
 to `codex exec resume`, which would run a separate CLI session. If discovery fails,
 `--app-pipe /path/to/socket --app-tools /path/to/codex-app-tools` supplies the local
 installation explicitly. The app must remain open. Remote/cloud conversations and
-busy target conversations are rejected.
+busy target conversations are rejected. Codex subagents use the collaboration
+messaging channel; the desktop API cannot initialize them by conversation ID.
 
 If acknowledgment times out, inspect the conversation and receipt before retrying.
 The initializer sends only one message and does not automatically resend after an
