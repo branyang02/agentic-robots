@@ -149,7 +149,10 @@ interpolate in joint space. The collision model excludes the table and other arm
 See the [action reference](../README.md#agent-observationaction-loop) for fields,
 checks, and feedback. `completed` only means execution finished; observations and
 actual feedback determine whether the task succeeded. Rejections provide correction
-guidance and keep the process alive. A latched hardware fault requires inspection.
+guidance and keep the process alive. For a tracking fault marked `recoverable`, the
+agent inspects the failure, calls `session recover`, then observes and chooses a
+corrected action. Recovery verifies powered hold before clearing the software latch;
+other latched faults stay blocked. See the action reference for recovery feedback.
 
 The project's [.codex/config.toml](../.codex/config.toml) configures optional native
 MCP tools. The initializer supplies a CLI command with the correct endpoint, so an
@@ -198,7 +201,7 @@ uv run pytest
 The default suite uses mocks or simulated arms and a fake desktop. HTTP subprocesses
 forbid CAN sockets; video tests use real FFmpeg and synthetic camera streams. Tests
 cover initialization acknowledgment and failure, idle recording, repeated tasks,
-rejection/correction, persistent hold, and final MP4 generation.
+rejection/correction, tracking-fault recovery, persistent hold, and final MP4 generation.
 
 To test the real desktop/LLM round trip, open an **idle disposable local conversation**
 and run the following. It sends visible messages and consumes Codex usage. This test
@@ -216,5 +219,7 @@ successive turns, and verifies both recordings, actions,
 observations, neutral joints, closed jaws, and retained sessions. Neither task asks
 for a neutral return; the test checks that initialization supplies this behavior and
 that the agent observes both arms at neutral after motion and before finishing.
+The first task injects one simulated tracking error and checks that the agent
+observes, recovers, and chooses a corrected action before completing the task.
 It is skipped in ordinary CI because CI has no signed-in desktop app. Software and
 synthetic video tests do not validate physical dynamics or visual robot accuracy.

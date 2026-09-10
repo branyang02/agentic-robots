@@ -43,9 +43,18 @@ def failure(exc, request=None, state=None, *, stopped=False, latched=False, hold
     details = getattr(exc, "details", {})
     if isinstance(exc, ValidationError):
         details = {"fields": exc.errors(include_url=False, include_context=False)}
+    recoverable = latched and (
+        code == "tracking_error"
+        or details.get("original_fault", {}).get("code") == "tracking_error"
+    )
     next_step = (
-        "Inspect session status and the reported hardware fault. Motion on this arm is blocked; "
-        "do not retry or clear motor protection faults automatically."
+        "Inspect cameras and fresh session status, identify a correction, then call session "
+        "with operation='recover' and this arm. Recovery checks powered hold before clearing "
+        "the software tracking fault. Only after success, choose a new action from measured "
+        "state; the interrupted action is not resumed."
+        if recoverable
+        else "Inspect session status and the reported control fault. Motion on this arm is "
+        "blocked; recovery is unavailable for this fault. Do not retry or reset motor protection."
         if latched
         else "Correct the reported request/configuration or choose another target, then retry. "
         "No session restart is needed for a rejected action."
@@ -59,6 +68,7 @@ def failure(exc, request=None, state=None, *, stopped=False, latched=False, hold
                 "message": str(exc),
                 "details": details,
                 "retryable": not latched,
+                "recoverable": recoverable,
                 "next_step": next_step,
             },
             "request": request,
@@ -337,9 +347,11 @@ class Bridge:
             for side in [arm] if arm else self.stops:
                 self.stops[side].set()
             return {"status": "stop requested; torque is not released"}
-        if operation not in ("start", "release") or arm is None:
-            return failure(ValueError("Specify start/release and left/right arm"), request)
-        if not supported:
+        if operation not in ("start", "release", "recover") or arm is None:
+            return failure(ValueError("Specify start/release/recover and left/right arm"), request)
+        if operation == "recover" and reset_communication:
+            return failure(ValueError("Recovery cannot reset motor communication"), request)
+        if operation != "recover" and not supported:
             return failure(ValueError("Startup/release requires physical support"), request)
         if not self.locks[arm].acquire(blocking=False):
             return failure(
@@ -349,6 +361,8 @@ class Bridge:
                 request,
             )
         try:
+            if operation == "recover":
+                return self._recover(arm, request)
             if operation == "start":
                 if arm in self.arms:
                     return failure(
@@ -384,6 +398,74 @@ class Bridge:
             return result
         finally:
             self.locks[arm].release()
+
+    def _recover(self, side, request):
+        """Called with the arm lock held; never reconnect or resume an old trajectory."""
+        if side not in self.arms:
+            return failure(RobotError("session_inactive", "Start the arm session first"), request)
+        fault = self.faults.get(side)
+        if fault is None:
+            return {"status": "no_fault", "arm": side, "fault_latched": False}
+        if fault.get("code") != "tracking_error":
+            return failure(
+                RobotError(
+                    "recovery_not_allowed",
+                    "Only software tracking faults support recovery",
+                    original_fault=fault,
+                ),
+                request,
+                stopped=True,
+                latched=True,
+            )
+        arm, state = self.arms[side], None
+        try:
+            self.stops[side].clear()
+            state = arm.read()
+            self.healthy(state)
+            target = vector(state["joints_rad"], 6)
+            arm.command(target)  # Preserve the gripper command and nonzero arm gains.
+            self.sleep(FEEDBACK_TIMEOUT_S)
+            if self.stops[side].is_set():
+                raise InterruptedError("Stop requested during recovery")
+            state = arm.read()
+            self.healthy(state)
+            error = np.asarray(state["joints_rad"]) - target
+            if np.max(abs(error)) > TRACKING_ERROR_RAD:
+                raise RobotError(
+                    "hold_unverified",
+                    "Arm did not maintain the recovery hold target",
+                    hold_target_rad=target.tolist(),
+                    error_rad=error.tolist(),
+                    maximum_error_rad=float(TRACKING_ERROR_RAD),
+                )
+        except Exception as exc:
+            return failure(
+                RobotError(
+                    "recovery_failed",
+                    str(exc),
+                    original_fault=fault,
+                    check_error={
+                        "code": getattr(exc, "code", "control_failure"),
+                        "details": getattr(exc, "details", {}),
+                        "exception_type": type(exc).__name__,
+                    },
+                ),
+                request,
+                state,
+                stopped=True,
+                latched=True,
+                hold="last command retained; torque not released",
+            )
+        del self.faults[side]
+        return {
+            "status": "recovered",
+            "arm": side,
+            "cleared_fault": fault,
+            "fault_latched": False,
+            "hold": "powered hold verified",
+            "hold_target_rad": target.tolist(),
+            "actual": state,
+        }
 
     @staticmethod
     def healthy(state):

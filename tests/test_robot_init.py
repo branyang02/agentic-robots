@@ -89,6 +89,7 @@ def test_initializer_sends_one_prompt_and_confirms_agent_ack_without_motion(
     assert calls == ["status"]
     receipt = json.loads(Path(result["receipt"]).read_text())
     assert receipt["prompt"] == sent[0]
+    assert Path(robot_init.__file__).with_name("robot_agent.md").read_text() in sent[0]
     assert receipt["turn_id"] == "ack-turn"
     assert "Do not run a robot task" in sent[0]
     assert str(args.repo) in sent[0] and args.url in sent[0]

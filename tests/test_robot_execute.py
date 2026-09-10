@@ -305,3 +305,37 @@ def test_latched_fault_explains_original_failure(bridge):
     assert not first["error"]["retryable"]
     next_result = bridge.execute(request())
     assert next_result["error"]["details"]["original_fault"] == first["error"]
+
+
+def test_tracking_stop_offers_recovery_but_does_not_allow_action_retry(bridge):
+    arm = bridge.arms["left"]
+    arm.frozen = True
+    stopped = bridge.execute(request())
+    assert stopped["fault_latched"]
+    assert stopped["error"]["code"] == "tracking_error"
+    assert stopped["error"]["recoverable"]
+    assert not stopped["error"]["retryable"]
+    assert "recover" in stopped["error"]["next_step"]
+    assert stopped["last_feedback"]["healthy"]
+    count = len(arm.commands)
+    blocked = bridge.execute(request(0))
+    assert blocked["error"]["code"] == "fault_latched"
+    assert blocked["error"]["recoverable"]
+    assert blocked["error"]["details"]["original_fault"] == stopped["error"]
+    assert len(arm.commands) == count
+    assert not arm.closed
+
+
+@pytest.mark.parametrize("problem", ["unhealthy", "stale", "read_failure"])
+def test_other_runtime_faults_do_not_offer_recovery(bridge, problem):
+    arm = bridge.arms["left"]
+    if problem == "unhealthy":
+        arm.healthy = False
+    elif problem == "stale":
+        arm.feedback_age = 1
+    else:
+        arm.read = lambda: (_ for _ in ()).throw(RuntimeError("unknown driver failure"))
+    stopped = bridge.execute(request())
+    assert stopped["fault_latched"]
+    assert not stopped["error"]["recoverable"]
+    assert not bridge.execute(request())["error"]["recoverable"]

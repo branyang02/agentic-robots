@@ -50,3 +50,18 @@ class ManualClock:
 
     def sleep(self, dt):
         self.now += dt
+
+
+class TrackingSlipArm(FakeArm):
+    """One simulated feedback excursion on the left arm's first changed joint command."""
+
+    def __init__(self, side, **kwargs):
+        super().__init__()
+        self.slip_pending = side == "left"
+
+    def command(self, q):
+        slip = self.slip_pending and np.max(abs(q - self.q)) > 1e-6
+        super().command(q)
+        if slip:
+            self.q[0] += 0.07
+            self.slip_pending = False

@@ -55,11 +55,19 @@ The collision model omits the table and the other arm: assess clearance from the
 scene and separate arms near shared goals. `completed` only means the command
 sequence finished; compare actual joints, errors, and images with the goal.
 
-`rejected` includes an error code, details, request, feedback, retryability, and
+`rejected` includes an error code, details, request, feedback, retryability, recoverability, and
 next-step guidance. Revise the request using that feedback. Do not kill the process
-on a rejection. On `stopped` with `fault_latched`, inspect the failure and stop
-issuing actions to that arm. Do not reset motor protection or blindly repeat a
-request after an unknown transport outcome. Inspect status first.
+on a rejection. On `stopped` with `fault_latched`, pause actions on that arm and
+inspect cameras and fresh session status. If `error.recoverable` is true, identify
+a correction and call `session` with `{"operation":"recover","arm":"left"}` (or
+right). This checks powered hold and clears only a software tracking fault; it
+preserves the gripper command and does not resume the interrupted action. After
+`recovered`, observe again and choose a corrected action from the measured pose,
+adjusting the path or duration as appropriate. Recovery failures provide detailed
+feedback and keep the fault latched; address the reported cause before trying again.
+If the same failure repeats, reassess the approach instead of replaying unchanged
+commands. Other latched faults remain blocked. Do not reset motor protection or
+blindly repeat a request after an unknown transport outcome. Inspect status first.
 If a task fails, still return to neutral when control remains usable. If a failure
 or interruption prevents the return or its verification, retain powered hold,
 finish the recording if possible, and report the task as incomplete with the

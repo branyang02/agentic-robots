@@ -57,6 +57,28 @@ def assert_task_trace(log, number):
     )
     finished_at = next(i for i, e in enumerate(log) if e["kind"] == "recording_finished")
     assert last_action < observed_at < finished_at, "Verify neutral after motion, before finishing"
+    if number == 1:
+        fault_at, fault = next(
+            (i, e)
+            for i, e in enumerate(log)
+            if e.get("result", {}).get("error", {}).get("code") == "tracking_error"
+        )
+        assert fault["result"]["error"]["recoverable"]
+        recovery_at = next(
+            i for i, e in enumerate(log) if e.get("result", {}).get("status") == "recovered"
+        )
+        correction_at, correction = next(
+            (i, e["arguments"]["action"])
+            for i, e in enumerate(log)
+            if i > recovery_at
+            and e["kind"] == "request"
+            and e.get("tool") == "execute"
+            and e["arguments"]["action"]["arm"] == "left"
+        )
+        assert fault_at < recovery_at < correction_at < observed_at
+        assert any(e["kind"] == "observation" for e in log[fault_at:recovery_at])
+        assert any(e["kind"] == "observation" for e in log[recovery_at:correction_at])
+        assert correction != requests[fault["request_id"]], "Choose a corrected action"
     assert set(final["arms"]) == {"left", "right"}
     assert not final["faults"]
     assert all(
@@ -68,6 +90,7 @@ def assert_task_trace(log, number):
 
 
 @pytest.mark.skipif(not THREAD, reason="Opt in with an idle local Codex test conversation ID")
+@pytest.mark.parametrize("http_robot", ["TrackingSlipArm"], indirect=True)
 def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, monkeypatch):  # noqa: F811
     call, url, output, recorder, controller, root = http_recorder
     args = Args(THREAD, repo=root, url=url, startup_supported=True)

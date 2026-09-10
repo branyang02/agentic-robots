@@ -87,8 +87,9 @@ def make_server(bridge):
         camera streams fresh. Call recording(start, text=<user task>) first.
         Checks command validity, joint limits, sampled self-collision, and control health.
         completed means commands were sent, not that the task succeeded; inspect actual and
-        joint_error_rad. rejected can be revised; stopped with fault_latched requires attention.
-        Errors include a code, details, last feedback, retryable, and next_step.
+        joint_error_rad. rejected can be revised; stopped with fault_latched blocks new actions.
+        Only errors marked recoverable permit session recover after inspection.
+        Errors include a code, details, last feedback, retryable, recoverable, and next_step.
         The service stays up after errors.
         Different arms may execute concurrently. No automatic return or torque release.
         A client disconnect may let an action finish; session stop explicitly interrupts it.
@@ -97,7 +98,7 @@ def make_server(bridge):
 
     @server.tool()
     async def session(
-        operation: Literal["start", "status", "stop", "release"],
+        operation: Literal["start", "status", "stop", "release", "recover"],
         arm: Literal["left", "right"] | None = None,
         supported: bool = False,
         reset_communication: bool = False,
@@ -107,6 +108,10 @@ def make_server(bridge):
         Start enables an arm, keeping gripper effort zero; stop retains powered hold.
         Stop affects the specified arm, or both if arm is omitted. An explicit stop does
         not latch a hardware fault. Status reports feedback errors independently per arm.
+        Recover requires an arm and a latched software tracking fault. It verifies fresh
+        feedback and powered hold at the measured pose before clearing that fault, preserving
+        the gripper command. It never resumes an action, reconnects, or resets protection.
+        Recovery failure retains the latch and returns diagnostics; inspect and correct them.
         Release removes torque. reset_communication permits one timeout reset at startup
         only, never a temperature/current/protection reset. Registration enables no motors.
         """

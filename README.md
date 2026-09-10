@@ -209,7 +209,7 @@ Four responsibilities remain in the bridge:
 | `stopped` | Execution interrupted or a prior control fault blocks it; inspect `fault_latched`, `hold`, and the error. |
 
 Error feedback includes `error.code`, `error.message`, `error.details`,
-`error.retryable`, and `error.next_step`, plus the original `request` and
+`error.retryable`, `error.recoverable`, and `error.next_step`, plus the original `request` and
 `last_feedback` when available. Joint-limit errors include allowed ranges and
 violating joint numbers. IK failures include residuals and tolerances; collisions
 identify bodies and a sampled pose; tracking failures include the previous command
@@ -222,6 +222,17 @@ when feedback remains usable. Feedback may be unavailable, so the reported hold
 request is not a guarantee. An explicit session `stop` interrupts the selected arm
 (or both when `arm` is omitted) without releasing torque or latching a hardware fault.
 The bridge does not clear motor protection faults or automatically reconnect.
+
+A latched `tracking_error` is eligible for `session` with
+`{"operation":"recover","arm":"right"}` (or left). Inspect the scene and failure
+first. Recovery holds the measured joints, preserves the gripper command, and checks
+fresh feedback after 150 ms against the existing 3° tracking tolerance. Success
+returns `recovered` with measured state and clears the software latch; it sends no
+trajectory. The agent then observes and chooses a corrected action. A failed check
+keeps the original fault and returns its cause. Other fault types cannot be cleared
+this way. `recoverable` means recovery may be attempted; `retryable` remains false
+for actions while the fault is latched. Recovery needs the existing arm session and
+uses the same per-arm lock as execution; it does not require release or startup.
 
 The current Codex conversation is the agent. `scripts/robot_agent.md` describes the loop: choose
 when to observe, reason about a target and duration, execute, and assess the returned

@@ -143,3 +143,69 @@ def test_two_tasks_reuse_http_service_and_preserve_hold(http_recorder):
             )
             == 4
         )
+
+
+@pytest.mark.parametrize("http_robot", ["TrackingSlipArm"], indirect=True)
+def test_recorded_tracking_stop_recover_correct_and_return(http_recorder):
+    call, _, _, recorder, controller, _ = http_recorder
+    task = "Recover from a simulated tracking stop, correct the movement, then return to neutral"
+    start = call("recording", {"operation": "start", "text": task})
+    assert start["ready"]
+    for arm in ("left", "right"):
+        call("session", {"operation": "start", "arm": arm, "supported": True})
+    call(
+        "execute",
+        {
+            "action": {
+                "arm": "left",
+                "kind": "gripper_target",
+                "gripper_opening": 0.2,
+                "duration_s": 0.1,
+            }
+        },
+    )
+    action = {
+        "arm": "left",
+        "kind": "joint_target",
+        "joints_rad": [0.2, 0, 0, 0, 0, 0],
+        "duration_s": 0.2,
+    }
+    stopped = call("execute", {"action": action}, error=True)
+    assert stopped["error"]["code"] == "tracking_error"
+    assert stopped["error"]["recoverable"] and not stopped["error"]["retryable"]
+    observed = call("observe")
+    assert len(observed["images"]) == 3
+    held = observed["arms"]["left"]["joints_rad"]
+    count = observed["arms"]["left"]["command_count"]
+    blocked = call("execute", {"action": {**action, "joints_rad": [0] * 6}}, error=True)
+    assert blocked["fault_latched"]
+    recovered = call("session", {"operation": "recover", "arm": "left"})
+    assert recovered["status"] == "recovered"
+    assert recovered["actual"]["joints_rad"] == held
+    assert recovered["actual"]["command_count"] == count + 1
+    assert recovered["actual"]["gripper_opening"] == pytest.approx(0.2)
+    assert recovered["cleared_fault"] == stopped["error"]
+    observed = call("observe")
+    assert not observed["faults"]
+    correction = {
+        **action,
+        "kind": "joint_delta",
+        "joints_rad": [0.02, 0, 0, 0, 0, 0],
+        "duration_s": 0.4,
+    }
+    corrected = call("execute", {"action": correction})
+    assert corrected["actual"]["joints_rad"][0] == pytest.approx(held[0] + 0.02)
+    for arm in ("left", "right"):
+        call("execute", {"action": {**action, "arm": arm, "joints_rad": [0] * 6}})
+    final = call("observe")
+    assert all(s["joints_rad"] == [0] * 6 for s in final["arms"].values())
+    assert not final["faults"] and not final["errors"]
+    assert final["arms"]["left"]["gripper_opening"] == pytest.approx(0.2)
+    assert call("recording", {"operation": "finish"})["status"] == "finished"
+    directory = Path(start["output"])
+    assert frame(directory / "rollout.mp4").size == (1920, 516)
+    events = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
+    assert any(e.get("arguments", {}).get("operation") == "recover" for e in events)
+    assert any(e.get("result", {}).get("status") == "recovered" for e in events)
+    assert not any(e.get("arguments", {}).get("operation") == "release" for e in events)
+    assert recorder.poll() is None and controller.poll() is None

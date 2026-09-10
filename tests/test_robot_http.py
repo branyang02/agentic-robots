@@ -13,9 +13,11 @@ from PIL import Image
 
 
 @pytest.fixture
-def http_robot(tmp_path):
+def http_robot(tmp_path, request):
     root = Path(__file__).resolve().parents[1]
     image = tmp_path / "top.png"
+    arm_type = getattr(request, "param", "FakeArm")
+    assert arm_type in {"FakeArm", "TrackingSlipArm"}
     Image.new("RGB", (20, 20), "white").save(image)
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
@@ -30,8 +32,8 @@ def http_robot(tmp_path):
         "socket.socket=NoCAN\n"
         "from scripts.robot_bridge import Bridge\n"
         "from scripts.robot_mcp import make_server\n"
-        "from tests.robot_fakes import FakeArm\n"
-        f"bridge=Bridge(lambda:({{'top':{str(image)!r}}},{{'camera:left':'offline'}}),arm_factory=FakeArm)\n"
+        f"from tests.robot_fakes import {arm_type}\n"
+        f"bridge=Bridge(lambda:({{'top':{str(image)!r}}},{{'camera:left':'offline'}}),arm_factory={arm_type})\n"
         f"make_server(bridge).run(transport='streamable-http',host='127.0.0.1',port={port})\n"
     )
     log = (tmp_path / "server.log").open("w")
