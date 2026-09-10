@@ -15,6 +15,7 @@ from PIL import Image
 
 from agentic_robots.bridge import RobotError, failure, json_ready, write_result
 from agentic_robots.cameras import auto_exposure, configured_cameras, input_args
+from agentic_robots.task import TERMINAL, Review, control_unavailable, neutral_feedback
 
 ORDER = ("left", "top", "right")
 
@@ -122,6 +123,7 @@ class Rollout:
         self.stop_poll = threading.Event()
         self.poll_thread = None
         self.manifest = {
+            "task": {"phase": "active"},
             "prompt": prompt,
             "started_unix": self.epoch,
             "upstream": upstream,
@@ -232,6 +234,7 @@ class Rollout:
             "capture_alive": alive,
             "preview_age_s": ages,
             "in_flight": self.in_flight,
+            "task": dict(self.manifest["task"]),
             "ready": self.state == "recording"
             and alive
             and self.error is None
@@ -357,11 +360,16 @@ class RecordingBridge:
         self.cameras = cameras or configured_cameras
         self.upstream = rollout.upstream if rollout else upstream
         self.lifecycle = threading.Lock()
+        self.binding = None
+        self.watch_error = None
 
     def status(self):
-        return self.rollout.status() if self.rollout else {"status": "idle", "ready": False}
+        result = self.rollout.status() if self.rollout else {"status": "idle", "ready": False}
+        if self.binding:
+            result["agent"] = {**self.binding, "error": self.watch_error}
+        return result
 
-    def recording(self, operation, text=""):
+    def recording(self, operation, text="", review=None, thread_id="", turn_id=""):
         # Serialize starts/finishes; status and controller stop remain available during I/O.
         if operation == "status":
             return self.status()
@@ -369,6 +377,7 @@ class RecordingBridge:
             return failure(RobotError("recording_busy", "A recording is starting or finishing"))
         try:
             r = self.rollout
+            task = r.manifest["task"] if r else {}
             if operation == "start":
                 if not text.strip():
                     raise RobotError("task_required", "Pass the user's task prompt in text")
@@ -378,14 +387,111 @@ class RecordingBridge:
                         "Finish the current recording first",
                         recording=r.status(),
                     )
+                capture_start_failed = (
+                    r
+                    and r.state == "failed"
+                    and not task.get("motion_started")
+                    and task["phase"] == "active"
+                )
+                if r and task["phase"] not in TERMINAL | {"retry"} and not capture_start_failed:
+                    raise RobotError(
+                        "attempt_unreviewed",
+                        "Finish and review the previous attempt first",
+                        task=task,
+                    )
                 output = self.output_root / (
                     time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
                 )
                 self.rollout = Rollout(output, text, self.cameras(), self.upstream)
+                if r and task["phase"] == "retry":
+                    self.rollout.manifest["task"].update(
+                        previous_attempt=str(r.output), correction=task["review"]["correction"]
+                    )
                 self.rollout.start()
             elif operation == "finish":
                 if r:
+                    if task["phase"] in TERMINAL | {"review", "retry"}:
+                        return self.status()
+                    with r.activity:
+                        if r.in_flight:
+                            raise RobotError("actions_in_flight", "Wait for active actions")
+                        neutral = neutral_feedback(self.session("status"))
+                        if neutral["verified"]:
+                            time.sleep(0.15)
+                            neutral = neutral_feedback(self.session("status"))
+                        task["neutral"] = neutral
+                        if not neutral["verified"]:
+                            raise RobotError(
+                                "neutral_unverified",
+                                "Continue from measured state; recover/revise the return. "
+                                "A failed return action does not end the task.",
+                                **neutral,
+                            )
+                        # Block new actions before releasing the lock to finalize the video.
+                        task["phase"] = "review"
                     return r.finish()
+            elif operation == "return":
+                if not r or task.get("phase") not in {"active", "returning", "review"}:
+                    raise RobotError(
+                        "no_active_attempt", "There is no active attempt to return from"
+                    )
+                if not text.strip():
+                    raise RobotError(
+                        "reason_required", "Explain completion or the last-resort reset"
+                    )
+                task.update(phase="returning", return_reason=text)
+                try:
+                    r.save_manifest()
+                except OSError as exc:
+                    # A failed disk must not trap powered arms away from neutral.
+                    return {**self.status(), "recording_error": str(exc)}
+            elif operation == "review":
+                if not r:
+                    raise RobotError("no_attempt", "Start an attempt first")
+                decision = review if isinstance(review, Review) else Review.model_validate(review)
+                if task["phase"] in TERMINAL | {"retry"}:
+                    if task.get("review") == decision.model_dump():
+                        return self.status()
+                    raise RobotError("already_reviewed", "This attempt already has a decision")
+                if decision.outcome in {"needs_intervention", "paused"}:
+                    state = self.session("status")
+                    if decision.intervention == "control_unavailable" and not control_unavailable(
+                        state
+                    ):
+                        raise RobotError(
+                            "control_still_available",
+                            "A recoverable tracking fault alone does not justify abandoning return",
+                            feedback=state,
+                        )
+                    with r.activity:
+                        if r.in_flight:
+                            raise RobotError(
+                                "actions_in_flight", "Inspect/stop active motion first"
+                            )
+                        task.update(phase="review", last_feedback=state)
+                    r.finish()  # Preserve the video even when physical return is impossible.
+                elif task["phase"] != "review":
+                    raise RobotError(
+                        "review_not_ready", "Verify neutral and finish the video first"
+                    )
+                else:
+                    neutral = neutral_feedback(self.session("status"))
+                    if not neutral["verified"]:
+                        raise RobotError(
+                            "neutral_unverified", "Neutral is no longer verified", **neutral
+                        )
+                task.update(phase=decision.outcome, review=decision.model_dump())
+                r.save_manifest()
+            elif operation == "bind":
+                if r and task["phase"] not in TERMINAL:
+                    raise RobotError(
+                        "task_active", "Finish the current task before binding an agent"
+                    )
+                uuid.UUID(thread_id)
+                if not turn_id:
+                    raise RobotError("turn_required", "Supply the acknowledged initialization turn")
+                self.binding = {"thread_id": thread_id, "after_turn_id": turn_id}
+                self.watch_error = None
             elif operation == "note":
                 if not r or r.state != "recording":
                     raise RobotError(
@@ -393,7 +499,9 @@ class RecordingBridge:
                     )
                 r.note(text)
             else:
-                raise RobotError("invalid_operation", "Use start, status, note, or finish")
+                raise RobotError(
+                    "invalid_operation", "Use start, status, note, return, finish, review, or bind"
+                )
             return self.status()
         except Exception as exc:
             return failure(
@@ -413,7 +521,11 @@ class RecordingBridge:
                 try:
                     r.event("request", request_id=request_id, tool=tool, arguments=arguments)
                 except OSError as exc:
-                    if tool != "session" or arguments.get("operation") not in {"status", "stop"}:
+                    returning = r.manifest["task"]["phase"] == "returning"
+                    if not returning and (
+                        tool != "session"
+                        or arguments.get("operation") not in {"status", "stop", "recover"}
+                    ):
                         raise
                     logging_error = str(exc)
             result = upstream_call(self.upstream, tool, arguments)
@@ -454,11 +566,14 @@ class RecordingBridge:
                 action.model_dump(),
             )
         with r.activity:
-            if not r.status()["ready"]:
+            phase = r.manifest["task"]["phase"]
+            if phase != "returning" and (phase != "active" or not r.status()["ready"]):
                 result = failure(
                     RobotError(
                         "recording_unavailable",
-                        "Recording is unavailable; no action forwarded",
+                        "Recording is unavailable; no action forwarded. Restore recording, or "
+                        "declare recording(return, text=<reason>) for an agent-planned return. "
+                        "Return actions retain controller checks and use best-effort recording.",
                         recording=r.status(),
                     ),
                     action.model_dump(),
@@ -477,6 +592,8 @@ class RecordingBridge:
                     result["recording_error"] = str(exc)
                 return result
             r.in_flight += 1
+            r.manifest["task"]["motion_started"] = True
+            r.manifest["task"].pop("watch_paused", None)
         try:
             return self.forward("execute", {"action": action.model_dump(exclude_none=True)})
         finally:
@@ -484,6 +601,8 @@ class RecordingBridge:
                 r.in_flight -= 1
 
     def session(self, operation, arm=None, supported=False, reset_communication=False):
+        if operation == "stop" and self.rollout:
+            self.rollout.manifest["task"]["watch_paused"] = True
         return self.forward(
             "session",
             dict(

@@ -19,7 +19,7 @@ def http_robot(tmp_path, request):
     root = Path(__file__).resolve().parents[1]
     image = tmp_path / "top.png"
     arm_type = getattr(request, "param", "FakeArm")
-    assert arm_type in {"FakeArm", "TrackingSlipArm"}
+    assert arm_type in {"FakeArm", "TrackingSlipArm", "ReturnSlipArm"}
     Image.new("RGB", (20, 20), "white").save(image)
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))

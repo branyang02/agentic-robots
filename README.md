@@ -318,8 +318,11 @@ The additional `recording` tool takes one of these argument objects:
 ```
 
 Phase notes are logged and displayed in the video. After the task and its final
-observation, call `finish`; it refuses while an action through the recorder is
-still in flight. It keeps serving and accepts another `start` for the next task.
+observation, `finish` verifies measured neutral and refuses while an action is active.
+The agent then reviews the video and records its decision with `recording(review)`.
+The service accepts another `start` after that review; retries retain the previous
+attempt's path and correction. See [the run guide](docs/agentic-runs.md) for the
+completion, review, and idle-agent continuation protocol.
 Between tasks, `observe` returns live joint feedback without camera images, and
 controller calls leave completed recordings unchanged.
 The resulting directory contains:
@@ -338,8 +341,10 @@ are converted by V4L2; the cameras are not hardware synchronized. Snapshot times
 are file publication times, and telemetry rate is best effort. This is a record of
 what was commanded and observed, not an independent measurement of Cartesian accuracy.
 
-If recording becomes unavailable, its endpoint rejects new motion with detailed
-recording status. Explicit session stop remains available. A recorder failure does
+If recording becomes unavailable, its endpoint rejects new task motion with detailed
+recording status. An explicit `recording(return, text=<reason>)` declaration enables
+agent-chosen return actions with best-effort logging and unchanged controller checks.
+Session status, stop, and recovery remain available. A recorder failure does
 not release torque or cancel an action already running in the motor bridge; inspect
 upstream status before deciding whether a command needs correction. Finishing or
 stopping the recorder leaves the independent motor bridge and its holds running.

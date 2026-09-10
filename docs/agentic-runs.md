@@ -12,7 +12,8 @@ flowchart LR
     R <-->|actions and feedback| B[Motor bridge :8767]
     B <--> H[i2rt / robot arms]
     C[Cameras] --> R
-    R --> F[One video and event log per task]
+    R --> F[Video, events, and review per attempt]
+    R -->|resume an unfinished idle turn| A
 ```
 
 ## Prepare the robot computer
@@ -55,7 +56,7 @@ an authorized session.
 
 The recorder starts **idle**: it opens no cameras and enables no motors. It creates
 a fresh directory and starts capture when the agent calls `recording(start, text)`.
-`recording(finish)` finalizes that task's video and releases camera streams while
+`recording(finish)` verifies neutral, finalizes that attempt's video, and releases camera streams while
 leaving the recorder process and motor sessions running. No recorder restart or
 manually prepared task prompt file is needed between tasks.
 Between tasks, observations return live joint feedback without camera images;
@@ -83,6 +84,13 @@ uv run robot-init --thread-id YOUR_CONVERSATION_ID
 The command checks recorder availability, sends the
 [canonical setup prompt](../src/agentic_robots/robot_agent.md) plus the repository path and
 endpoint to that existing conversation, and waits for an exact acknowledgment.
+It then binds that conversation to the recorder's continuation watcher. The watcher
+uses the same desktop conversation and sends no robot actions. It only continues an
+idle, normally completed turn whose task lacks a final reviewed outcome; active,
+interrupted, failed, and explicitly paused turns are left alone. A controller `stop`
+also suppresses continuation until the agent explicitly executes again. Status exposes
+adapter errors. Keep Codex and the recorder open; this is not an independent LLM or
+a guarantee of recovery if either application is unavailable.
 The agent replies `Robot ready [init:…]` and waits. Initialization does not start
 capture, enable motors, or move the arms. Its receipt, including the exact prompt,
 acknowledgment, and turn ID, is saved in `outputs/robot-init/<conversation-id>.json`.
@@ -111,7 +119,10 @@ to `codex exec resume`, which would run a separate CLI session. If discovery fai
 `--app-pipe /path/to/socket --app-tools /path/to/codex-app-tools` supplies the local
 installation explicitly. The app must remain open. Remote/cloud conversations and
 busy target conversations are rejected. Codex subagents use the collaboration
-messaging channel; the desktop API cannot initialize them by conversation ID.
+messaging channel for initialization and continuation; the desktop adapter cannot
+send messages to them by conversation ID. Their parent applies the same initialization
+prompt and observes the recorder's task state. The automatic desktop watcher applies
+to ordinary initialized app conversations.
 
 If acknowledgment times out, inspect the conversation and receipt before retrying.
 The initializer sends only one message and does not automatically resend after an
@@ -129,15 +140,18 @@ The agent automatically starts recording with the task text, then repeats:
 1. Observe camera images and useful joint feedback.
 2. Choose a goal or correction, numerical targets, and durations; report concise intent.
 3. Execute the action and inspect the result and subsequent observations.
-4. Evaluate progress and self-correct until finished or a failure prevents continuation.
+4. Evaluate progress and recover in place while useful corrections remain available.
 
 Returning both arms to neutral (six zero joint targets per arm) is part of every
 task, including the example above which does not request a return. The agent verifies
-fresh measured joints and images after motion ends, then finishes the video and
-reports the result, final joint feedback, and a video link. This is an agent completion
-instruction; neither the bridge nor recorder executes a hidden return routine.
-If return or verification fails, the agent reports the task as incomplete and retains
-powered hold. A finished video alone does not mean the arms are neutral. Send
+fresh measured joints and images after motion ends, then finishes and reviews the video.
+The recorder verifies both arms before normal finalization; it never executes a hidden
+return routine. The agent chooses whether a last-resort neutral reset could help
+unfinished work. It records a review with success, a correction for a retry, or evidence
+of a specific blocker. Recoverable return faults require inspection and correction;
+they do not themselves justify giving up. Physical inability to return is recorded
+separately as `needs_intervention`, preserving available hold and video without claiming
+neutral. A raw encoder shutdown or interrupted recording never establishes neutral. Send
 another task in the same conversation to create another recording. The output root
 contains a unique timestamp/ID directory for every attempt. Previous attempts remain
 available for comparison. Task evaluation is done by this same Codex conversation.
@@ -169,13 +183,28 @@ The recorder's additional tool accepts:
 {"operation":"start","text":"The full task message"}
 {"operation":"status"}
 {"operation":"note","text":"Trace the upper lobes"}
+{"operation":"return","text":"Task completed; returning both arms"}
 {"operation":"finish"}
+{"operation":"review","review":{"outcome":"success","summary":"Observed task result","evidence":["rollout.mp4 at 00:18 and final joint observation"]}}
 ```
 
-`start` refuses to replace an active recording; `finish` refuses while an action is
-in flight. Both return correction feedback. New motion requires a ready recording
-with all three streams fresh. Status and explicit controller stop remain available
-even if capture or logging fails. Finishing never releases arm torque.
+`start` refuses to replace an active or unreviewed attempt. `finish` checks two fresh
+readings 150 ms apart: both arms within 3° of zero, joint speeds at most 0.05 rad/s,
+no latched faults, and no action in flight. These are completion tolerances, not new
+motion limits. Rejections include measured feedback, tolerances, and per-arm reasons.
+`review` persists the agent's decision in `manifest.json`; a retry requires a `correction`,
+and a blocked decision requires a `constraint`. Evidence is the agent's assessment;
+the harness does not independently judge the video or prove task impossibility.
+
+New task motion requires a ready recording with all three streams fresh. `return`
+declares intent without moving and permits agent-chosen return actions with best-effort
+logging if recording fails. Controller checks still apply. Status, recovery, and explicit
+controller stop remain available on logging failures. An exceptional review with outcome
+`needs_intervention` requires a constraint, evidence, and `intervention` of
+`control_unavailable` or `physical_obstruction`; a software tracking latch alone is not
+accepted as unavailable control. Outcome `paused` records an explicit user stop.
+Finalizing files during process cleanup is separate from completing a task.
+No recorder operation releases arm torque.
 
 Each directory contains `rollout.mp4`, `capture.mkv`, `events.jsonl`, `observations/`,
 `manifest.json`, `prompt.txt`, and `ffmpeg.log`. Video includes pauses between actions,
@@ -203,7 +232,8 @@ To defer end-to-end workflows, use `uv run pytest -m 'not e2e'`.
 The default suite uses mocks or simulated arms and a fake desktop. HTTP subprocesses
 forbid CAN sockets; video tests use real FFmpeg and synthetic camera streams. Tests
 cover initialization acknowledgment and failure, idle recording, repeated tasks,
-rejection/correction, tracking-fault recovery, persistent hold, and final MP4 generation.
+rejection/correction, tracking-fault recovery, neutral/review gates, an early-ended fake
+agent resuming after a return fault, persistent hold, and final MP4 generation.
 
 To test the real desktop/LLM round trip, open an **idle disposable local conversation**
 and run the following. It sends visible messages and consumes Codex usage. This test

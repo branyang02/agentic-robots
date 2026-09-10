@@ -146,7 +146,11 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, mo
                 for turn in page.get("turns", []):
                     if turn.get("id") == previous_id:
                         continue
-                    if turn.get("status") == "completed":
+                    if (
+                        turn.get("status") == "completed"
+                        and call("recording", {"operation": "status"}).get("task", {}).get("phase")
+                        == "success"
+                    ):
                         (tmp_path / f"agent-task-{number}.json").write_text(
                             json.dumps(page, indent=2)
                         )
@@ -164,6 +168,8 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, mo
         asyncio.run(task(prompt, number))
         status = call("recording", {"operation": "status"})
         assert status["status"] == "finished", status
+        assert status["task"]["phase"] == "success", status
+        assert status["task"]["review"]["evidence"]
         directory = Path(status["output"])
         assert prompt in (directory / "prompt.txt").read_text()
         assert frame(directory / "rollout.mp4").size == (1920, 516)

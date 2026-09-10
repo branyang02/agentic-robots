@@ -36,8 +36,11 @@ def setup(tmp_path, monkeypatch):
     app, recorder = MCPServer("fake-desktop"), MCPServer("fake-recorder")
 
     @recorder.tool()
-    def recording(operation: str):
+    def recording(operation: str, thread_id: str = "", turn_id: str = ""):
         calls.append(operation)
+        if operation == "bind":
+            assert thread_id == args.thread_id and turn_id == "ack-turn"
+            return structured({"status": "idle", "agent": {"thread_id": thread_id}})
         return structured({"status": "idle", "ready": False})
 
     @app.tool()
@@ -88,7 +91,7 @@ def test_initializer_sends_one_prompt_and_confirms_agent_ack_without_motion(
     result = asyncio.run(robot_init.initialize(args))
     assert result["status"] == "acknowledged"
     assert len(sent) == 1
-    assert calls == ["status"]
+    assert calls == ["status", "bind"]
     receipt = json.loads(Path(result["receipt"]).read_text())
     assert receipt["prompt"] == sent[0]
     assert files("agentic_robots").joinpath("robot_agent.md").read_text() in sent[0]

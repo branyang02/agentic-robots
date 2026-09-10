@@ -75,6 +75,7 @@ def test_bridge_port_reaches_server(argv, port, monkeypatch):
 def test_recorder_paths_and_server_options(tmp_path, monkeypatch, custom):
     output = tmp_path / "new rollout"
     factory = Mock()
+    factory.return_value.binding = None
     server = Mock()
     monkeypatch.setattr(robot_record, "RecordingBridge", factory)
     monkeypatch.setattr(robot_record, "recording_server", lambda rollout: server)
@@ -89,7 +90,8 @@ def test_recorder_paths_and_server_options(tmp_path, monkeypatch, custom):
     factory.assert_called_once_with(output_root=output, upstream=upstream)
     factory.return_value.start.assert_not_called()
     server.run.assert_called_once_with(transport="streamable-http", host="127.0.0.1", port=port)
-    factory.return_value.recording.assert_called_once_with("finish")
+    factory.return_value.rollout.finish.assert_called_once_with()
+    factory.return_value.recording.assert_not_called()
 
 
 @pytest.mark.parametrize("is_error", [False, True])

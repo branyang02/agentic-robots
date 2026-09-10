@@ -150,6 +150,26 @@ async def initialize(args):
                         and acknowledgment_file.read_text().strip() == token
                     )
                     if message_ack or file_ack:
+                        async with Client(args.url, read_timeout_seconds=10) as robot:
+                            bound = await robot.call_tool(
+                                "recording",
+                                {
+                                    "operation": "bind",
+                                    "thread_id": args.thread_id,
+                                    "turn_id": turn["id"],
+                                },
+                            )
+                            if (
+                                bound.is_error
+                                or not bound.structured_content
+                                or (
+                                    bound.structured_content.get("agent", {}).get("thread_id")
+                                    != args.thread_id
+                                )
+                            ):
+                                raise RuntimeError(
+                                    "Prompt acknowledged, but recorder agent binding failed"
+                                )
                         record.update(status="acknowledged", turn_id=turn["id"])
                         save()
                         return {

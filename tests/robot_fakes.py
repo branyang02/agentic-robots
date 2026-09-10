@@ -65,3 +65,18 @@ class TrackingSlipArm(FakeArm):
         if slip:
             self.q[0] += 0.07
             self.slip_pending = False
+
+
+class ReturnSlipArm(FakeArm):
+    """One software tracking fault during the left arm's return toward neutral."""
+
+    def __init__(self, side, **kwargs):
+        super().__init__()
+        self.slip_pending = side == "left"
+
+    def command(self, q):
+        slip = self.slip_pending and self.q[0] > 0.05 and q[0] < self.q[0] - 1e-6
+        super().command(q)
+        if slip:
+            self.q[0] += 0.07
+            self.slip_pending = False

@@ -458,7 +458,21 @@ def test_http_cli_recorder_shutdown_does_not_stop_controller(http_robot, tmp_pat
             },
         )
         assert result["status"] == "completed"
-        assert proxy("recording", {"operation": "finish"})["status"] == "finished"
+        # Explicit test teardown preserves the video/hold without claiming neutral.
+        assert (
+            proxy(
+                "recording",
+                {
+                    "operation": "review",
+                    "review": {
+                        "outcome": "paused",
+                        "summary": "Test requests stop with the arm held",
+                        "evidence": ["Test teardown; left joint 1 remains at 0.1 rad"],
+                    },
+                },
+            )["status"]
+            == "finished"
+        )
         proc.terminate()
         proc.wait(timeout=10)
         assert controller.poll() is None
