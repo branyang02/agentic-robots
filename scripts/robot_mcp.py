@@ -46,12 +46,8 @@ def make_server(bridge):
     server = MCPServer(
         "robot",
         instructions=(
-            "The current agent chooses when to observe, targets, durations, and task completion. "
-            "Show useful images and concise action explanations. Revise rejected commands; halt "
-            "on latched control faults. No per-action human approval or fixed action budget. "
-            "Actions have no size, speed, acceleration, or temperature cap. Respect physical "
-            "clearance: the model excludes the table and the other arm. This service starts "
-            "disconnected; only explicit release removes torque."
+            "Local robot observation, action, and session tools. The calling agent supplies "
+            "targets and durations. Tool registration does not enable motors."
         ),
     )
 

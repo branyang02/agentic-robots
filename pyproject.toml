@@ -37,6 +37,7 @@ calibrate-gripper = "scripts.calibrate:main"
 robot-bridge = "scripts.robot_mcp:main"
 robot-call = "scripts.robot_mcp:call_main"
 robot-record = "scripts.robot_record:main"
+robot-init = "scripts.robot_init:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["scripts"]

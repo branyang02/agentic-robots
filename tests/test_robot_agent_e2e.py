@@ -1,0 +1,139 @@
+"""Opt-in desktop/LLM E2E. Uses only simulated arms and synthetic camera streams.
+
+ROBOT_CODEX_E2E_THREAD_ID must name an idle, disposable local Codex conversation.
+This sends visible prompts and consumes the signed-in Codex account's usage.
+"""
+
+import asyncio
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+from mcp import Client
+
+from scripts.robot_init import Args, app_call, app_transport
+from tests.test_robot_http import http_robot  # noqa: F401
+from tests.test_robot_record import frame
+from tests.test_robot_record_service import http_recorder  # noqa: F401
+
+THREAD = os.environ.get("ROBOT_CODEX_E2E_THREAD_ID")
+
+
+def assert_task_trace(log, number):
+    requests = {
+        e["request_id"]: e["arguments"]["action"]
+        for e in log
+        if e["kind"] == "request" and e["tool"] == "execute"
+    }
+    completed = [
+        (requests[e["request_id"]]["arm"], e["result"]["actual"])
+        for e in log
+        if e["kind"] == "response"
+        and e.get("tool") == "execute"
+        and e["result"].get("status") == "completed"
+    ]
+    assert any(e["kind"] == "observation" for e in log)
+    assert not any(e.get("arguments", {}).get("operation") == "release" for e in log)
+    for arm in ("left", "right"):
+        assert any(
+            side == arm
+            and (
+                any(abs(x) > 0.01 for x in actual["joints_rad"])
+                if number == 1
+                else actual["gripper_opening"] == 1
+            )
+            for side, actual in completed
+        ), "Require observed effects, not just requests"
+
+
+@pytest.mark.skipif(not THREAD, reason="Opt in with an idle local Codex test conversation ID")
+def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path):  # noqa: F811
+    call, url, output, recorder, controller, root = http_recorder
+    args = Args(THREAD, repo=root, url=url, startup_supported=True)
+    # Test socket discovery as from a normal terminal, without the agent's pipe environment.
+    env = {k: v for k, v in os.environ.items() if k != "CODEX_APP_TOOLS_PIPE_PATH"}
+    initialized = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.robot_init",
+            "--thread-id",
+            THREAD,
+            "--url",
+            url,
+            "--startup-supported",
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
+    (tmp_path / "initializer.stdout").write_text(initialized.stdout)
+    (tmp_path / "initializer.stderr").write_text(initialized.stderr)
+    assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(initialized.stdout)["status"] == "acknowledged"
+    assert call("session", {"operation": "status"})["arms"] == {}
+    assert not output.exists(), "Initialization must not start capture or move hardware"
+
+    async def task(prompt, number):
+        async with Client(app_transport(args), read_timeout_seconds=60) as app:
+            previous = await app_call(
+                app,
+                THREAD,
+                "read_thread",
+                {"threadId": THREAD, "turnLimit": 1, "includeOutputs": False},
+            )
+            previous_id = previous["turns"][0]["id"]
+            await app_call(
+                app, THREAD, "send_message_to_thread", {"threadId": THREAD, "prompt": prompt}
+            )
+            deadline = time.monotonic() + 600
+            while time.monotonic() < deadline:
+                # This external client acts in the target's context; the desktop's
+                # wait_threads tool forbids waiting on its own calling conversation.
+                page = await app_call(
+                    app,
+                    THREAD,
+                    "read_thread",
+                    {"threadId": THREAD, "turnLimit": 1, "includeOutputs": False},
+                )
+                for turn in page.get("turns", []):
+                    if turn.get("id") == previous_id:
+                        continue
+                    if turn.get("status") == "completed":
+                        (tmp_path / f"agent-task-{number}.json").write_text(
+                            json.dumps(page, indent=2)
+                        )
+                        return
+                await asyncio.sleep(3)
+            pytest.fail("Codex did not finish the simulated task; inspect the test conversation")
+
+    prompts = [
+        "Close both grippers, move both arms away from neutral, "
+        "and then return both arms to neutral. "
+        "Verify the result from the available observations.",
+        "Open both grippers, then close them again. "
+        "Keep both arms at neutral and verify the result.",
+    ]
+    for number, prompt in enumerate(prompts, 1):
+        asyncio.run(task(prompt, number))
+        status = call("recording", {"operation": "status"})
+        assert status["status"] == "finished", status
+        directory = Path(status["output"])
+        assert prompt in (directory / "prompt.txt").read_text()
+        assert frame(directory / "rollout.mp4").size == (1920, 516)
+        state = call("session", {"operation": "status"})
+        assert set(state["arms"]) == {"left", "right"}
+        assert all(
+            s["joints_rad"] == pytest.approx([0] * 6, abs=1e-6) and s["gripper_opening"] == 0
+            for s in state["arms"].values()
+        )
+        assert controller.poll() is None and recorder.poll() is None
+        log = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
+        assert_task_trace(log, number)
+    assert len(list(output.iterdir())) == 2

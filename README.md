@@ -227,7 +227,7 @@ request is not a guarantee. An explicit session `stop` interrupts the selected a
 (or both when `arm` is omitted) without releasing torque or latching a hardware fault.
 The bridge does not clear motor protection faults or automatically reconnect.
 
-The current Codex conversation is the agent. `AGENTS.md` describes the loop: choose
+The current Codex conversation is the agent. `scripts/robot_agent.md` describes the loop: choose
 when to observe, reason about a target and duration, execute, and assess the returned
 feedback. There is no separate reasoning model, fixed task routine, human-assessment
 step, or per-action approval. For example, start with the prompt:
@@ -248,14 +248,21 @@ holding. This controller is not safety-rated.
 
 ## Record a complete rollout
 
-Keep the existing motor bridge running. Start a separate recording endpoint with
-the camera environment variables exported and the task prompt in a text file:
+Keep the existing motor bridge running. Start a persistent recording endpoint with
+the camera environment variables exported, then initialize a local Codex conversation:
 
 ```bash
-uv run robot-record --prompt-file task.txt --output outputs/rollouts/heart-001
+.venv/bin/python -m scripts.robot_record --output-root outputs/rollouts
+# In another terminal, while the target conversation is idle:
+.venv/bin/python -m scripts.robot_init --thread-id YOUR_CONVERSATION_ID
 ```
 
-The output directory must be new. The recorder connects to the existing bridge at
+The recorder starts idle. After initialization acknowledges, send the task as an
+ordinary Codex message. The agent starts a fresh recording, executes and evaluates
+the task, and finishes the video. The same conversation and service support the
+next task. See [the run guide](docs/agentic-runs.md) for setup and testing.
+
+The recorder connects to the existing bridge at
 `http://127.0.0.1:8767/mcp` and exposes its recording endpoint on port **8768**.
 Override these with `--upstream` and `--port`. Starting or finishing recording does
 not start, release, reset, or restart an arm. The recorder owns the cameras while
@@ -277,13 +284,15 @@ The additional `recording` tool takes one of these argument objects:
 
 ```json
 {"operation":"status"}
+{"operation":"start","text":"Close the grippers, draw a heart, and return to neutral"}
 {"operation":"note","text":"Trace the upper lobes of the heart"}
 {"operation":"finish"}
 ```
 
 Phase notes are logged and displayed in the video. After the task and its final
 observation, call `finish`; it refuses while an action through the recorder is
-still in flight. The resulting directory contains:
+still in flight. It keeps serving and accepts another `start` for the next task.
+The resulting directory contains:
 
 - `rollout.mp4`: the continuous left / top / right camera video, with elapsed time
   and phase notes. It preserves the full run, including pauses between actions.

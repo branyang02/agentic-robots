@@ -25,10 +25,8 @@ ORDER = ("left", "top", "right")
 
 @dataclass
 class Args:
-    output: Path
-    """New rollout directory."""
-    prompt_file: Path
-    """Task prompt to save with the recording."""
+    output_root: Path = Path("outputs/rollouts")
+    """Parent directory for per-task recordings, created when the agent starts a task."""
     upstream: str = "http://127.0.0.1:8767/mcp"
     """Motor bridge's MCP endpoint."""
     port: int = 8768
@@ -355,15 +353,79 @@ class Rollout:
 
 
 class RecordingBridge:
-    def __init__(self, rollout):
+    def __init__(
+        self,
+        rollout=None,
+        *,
+        output_root=Path("outputs/rollouts"),
+        cameras=None,
+        upstream="http://127.0.0.1:8767/mcp",
+    ):
         self.rollout = rollout
+        self.output_root = Path(output_root).resolve()
+        self.cameras = cameras or configured_cameras
+        self.upstream = rollout.upstream if rollout else upstream
+        self.lifecycle = threading.Lock()
+
+    def status(self):
+        return self.rollout.status() if self.rollout else {"status": "idle", "ready": False}
+
+    def recording(self, operation, text=""):
+        # Serialize starts/finishes; status and controller stop remain available during I/O.
+        if operation == "status":
+            return self.status()
+        if not self.lifecycle.acquire(blocking=False):
+            return failure(RobotError("recording_busy", "A recording is starting or finishing"))
+        try:
+            r = self.rollout
+            if operation == "start":
+                if not text.strip():
+                    raise RobotError("task_required", "Pass the user's task prompt in text")
+                if r and r.state not in {"finished", "failed"}:
+                    raise RobotError(
+                        "recording_active",
+                        "Finish the current recording first",
+                        recording=r.status(),
+                    )
+                output = self.output_root / (
+                    time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+                )
+                self.rollout = Rollout(output, text, self.cameras(), self.upstream)
+                self.rollout.start()
+            elif operation == "finish":
+                if r:
+                    return r.finish()
+            elif operation == "note":
+                if not r or r.state != "recording":
+                    raise RobotError(
+                        "recording_not_started", "Start recording before adding a note"
+                    )
+                r.note(text)
+            else:
+                raise RobotError("invalid_operation", "Use start, status, note, or finish")
+            return self.status()
+        except Exception as exc:
+            return failure(
+                exc
+                if isinstance(exc, RobotError)
+                else RobotError("recording_error", str(exc), recording=self.status())
+            )
+        finally:
+            self.lifecycle.release()
 
     def forward(self, tool, arguments):
         request_id = uuid.uuid4().hex
         r = self.rollout
+        logging_error = None
         try:
-            r.event("request", request_id=request_id, tool=tool, arguments=arguments)
-            result = upstream_call(r.upstream, tool, arguments)
+            if r:
+                try:
+                    r.event("request", request_id=request_id, tool=tool, arguments=arguments)
+                except OSError as exc:
+                    if tool != "session" or arguments.get("operation") not in {"status", "stop"}:
+                        raise
+                    logging_error = str(exc)
+            result = upstream_call(self.upstream, tool, arguments)
         except Exception as exc:
             result = failure(
                 RobotError(
@@ -382,13 +444,24 @@ class RecordingBridge:
                 "Inspect controller status and the recording log; do not blindly replay."
             )
         try:
-            r.event("response", request_id=request_id, tool=tool, result=result)
+            if r:
+                r.event("response", request_id=request_id, tool=tool, result=result)
         except OSError as exc:
-            result["recording_error"] = str(exc)  # Preserve the actual controller outcome.
+            logging_error = str(exc)
+        if logging_error:
+            result["recording_error"] = logging_error  # Preserve the actual controller outcome.
         return result
 
     def execute(self, action):
         r = self.rollout
+        if r is None:
+            return failure(
+                RobotError(
+                    "recording_not_started",
+                    "Call recording(start, text=<user task>) before executing",
+                ),
+                action.model_dump(),
+            )
         with r.activity:
             if not r.status()["ready"]:
                 result = failure(
@@ -432,7 +505,8 @@ class RecordingBridge:
 
     def observe(self):
         start = time.time()
-        images, errors = self.rollout.snapshots()
+        r = self.rollout
+        images, errors = r.snapshots() if r else ({}, {"recording": "Start recording for images"})
         state = self.forward("session", {"operation": "status"})
         observation = {
             "capture_started_unix": start,
@@ -441,37 +515,37 @@ class RecordingBridge:
             "arms": state.get("arms", {}),
             "faults": state.get("faults", {}),
             "errors": {**state.get("errors", {}), **errors},
-            "recording": self.rollout.status(),
+            "recording": self.status(),
             "frame": "arm base; no calibrated world transform",
         }
         if "error" in state:
             observation["errors"]["controller"] = state["error"]
-        self.rollout.event("observation", observation=observation)
+        if r:
+            r.event("observation", observation=observation)
         return observation
 
 
-def recording_server(rollout):
-    server = make_server(RecordingBridge(rollout))
+def recording_server(bridge):
+    server = make_server(bridge)
 
     @server.tool()
-    async def recording(operation: Literal["status", "note", "finish"], text: str = ""):
-        """Inspect recording, log a phase note, or finish video without releasing robot torque."""
+    async def recording(operation: Literal["start", "status", "note", "finish"], text: str = ""):
+        """Start a new task video (text=user task), inspect it, add a note, or finish it.
+
+        The server stays available between tasks. Finishing never releases robot torque.
+        """
         try:
-            if operation == "note":
-                await asyncio.to_thread(rollout.note, text)
-            if operation == "finish":
-                result = await asyncio.to_thread(rollout.finish)
-                if result["status"] == "failed":
-                    raise RuntimeError(rollout.error)
-                return structured(result)
-            return structured(rollout.status())
+            result = await asyncio.to_thread(bridge.recording, operation, text)
+            if result["status"] == "failed":
+                raise RuntimeError(result["error"])
+            return structured(result)
         except Exception as exc:
             return structured(
                 failure(
                     RobotError(
                         "recording_error",
                         str(exc),
-                        recording=rollout.status(),
+                        recording=bridge.status(),
                     )
                 )
             )
@@ -481,14 +555,11 @@ def recording_server(rollout):
 
 def main():
     args = tyro.cli(Args, description=__doc__)
-    rollout = Rollout(
-        args.output, args.prompt_file.read_text().strip(), configured_cameras(), args.upstream
-    )
+    bridge = RecordingBridge(output_root=args.output_root, upstream=args.upstream)
     try:
-        rollout.start()
-        recording_server(rollout).run(transport="streamable-http", host="127.0.0.1", port=args.port)
+        recording_server(bridge).run(transport="streamable-http", host="127.0.0.1", port=args.port)
     finally:
-        rollout.finish()
+        bridge.recording("finish")
 
 
 if __name__ == "__main__":

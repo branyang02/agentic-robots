@@ -128,6 +128,60 @@ def test_finish_during_action_preserves_capture_and_hold(rollout):
     assert rollout.state == "recording"
 
 
+def test_idle_recorder_uses_no_cameras_and_reports_how_to_start(tmp_path, monkeypatch):
+    camera_factory = Mock(side_effect=AssertionError("must not open cameras"))
+    upstream = Mock(return_value={"arms": {}, "faults": {}, "errors": {}})
+    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    bridge = RecordingBridge(output_root=tmp_path / "absent", cameras=camera_factory)
+    assert bridge.recording("status") == {"status": "idle", "ready": False}
+    assert bridge.recording("finish")["status"] == "idle"
+    assert bridge.recording("start", " ")["error"]["code"] == "task_required"
+    assert bridge.recording("note", "note")["error"]["code"] == "recording_not_started"
+    result = bridge.execute(Action(arm="left", kind="joint_target", joints_rad=[0] * 6))
+    assert result["error"]["code"] == "recording_not_started"
+    upstream.assert_not_called()
+    assert bridge.observe()["images"] == {}
+    bridge.session("stop")
+    assert upstream.call_args.args[2]["operation"] == "stop"
+    camera_factory.assert_not_called()
+    assert not (tmp_path / "absent").exists()
+
+
+def test_recording_rejects_overlapping_starts_and_finish_during_action(rollout):
+    ready_fake(rollout)
+    bridge = RecordingBridge(rollout)
+    assert bridge.recording("start", "new")["error"]["code"] == "recording_active"
+    rollout.in_flight = 1
+    assert bridge.recording("finish")["error"]["code"] == "actions_in_flight"
+    assert bridge.rollout is rollout
+    assert rollout.state == "recording"
+    with bridge.lifecycle:
+        assert bridge.recording("start", "new")["error"]["code"] == "recording_busy"
+        assert bridge.recording("status")["status"] == "recording"
+
+
+def test_failed_start_reports_error_and_allows_correction(tmp_path, monkeypatch):
+    camera_factory = Mock(side_effect=[OSError("camera config missing"), cameras()])
+    monkeypatch.setattr(Rollout, "start", ready_fake)
+    bridge = RecordingBridge(output_root=tmp_path, cameras=camera_factory)
+    error = bridge.recording("start", "task")
+    assert error["error"]["code"] == "recording_error"
+    assert "camera config missing" in error["error"]["message"]
+    assert bridge.recording("start", "corrected")["ready"]
+
+
+def test_log_failure_does_not_block_stop_or_status(rollout, monkeypatch):
+    ready_fake(rollout)
+    monkeypatch.setattr(rollout, "event", Mock(side_effect=OSError("disk full")))
+    upstream = Mock(return_value={"status": "completed"})
+    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    for operation in ("stop", "status"):
+        result = RecordingBridge(rollout).session(operation)
+        assert upstream.call_args.args[2]["operation"] == operation
+        assert result["recording_error"] == "disk full"
+        assert result["status"] == "completed"
+
+
 def test_event_write_failure_does_not_send_an_unlogged_action(rollout, monkeypatch):
     ready_fake(rollout)
     (rollout.output / "events.jsonl").unlink()
@@ -244,7 +298,7 @@ def test_mcp_recorded_rollout_against_http_robot_preserves_hold(http_robot, tmp_
     r = Rollout(tmp_path / "recorded", "Close, move, and return", cameras(), url)
 
     async def run():
-        async with Client(recording_server(r)) as client:
+        async with Client(recording_server(RecordingBridge(r))) as client:
             for side in ("left", "right"):
                 result = await client.call_tool(
                     "session", {"operation": "start", "arm": side, "supported": True}
@@ -324,11 +378,12 @@ def test_http_cli_recorder_shutdown_does_not_stop_controller(http_robot, tmp_pat
         "  if family==socket.AF_CAN: raise RuntimeError('CAN forbidden in test')\n"
         "  super().__init__(family,*a,**kw)\n"
         "socket.socket=NoCAN\n"
-        "from scripts.robot_record import Rollout,recording_server\n"
+        "from scripts.robot_record import Rollout,RecordingBridge,recording_server\n"
         f'r=Rollout({str(output)!r},"HTTP recording test",{cameras()!r},{upstream!r})\n'
         "try:\n"
         " r.start()\n"
-        f' recording_server(r).run(transport="streamable-http",host="127.0.0.1",port={port})\n'
+        ' recording_server(RecordingBridge(r)).run(transport="streamable-http",'
+        f'host="127.0.0.1",port={port})\n'
         "finally: r.finish()\n"
     )
     log = (tmp_path / "recorder.log").open("w")
