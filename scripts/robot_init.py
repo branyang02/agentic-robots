@@ -124,7 +124,7 @@ def error_message(exc):
 
 def bootstrap(args, acknowledgment):
     repo = args.repo.resolve()
-    command = shlex.join([sys.executable, "-m", "scripts.robot_call", "--url", args.url])
+    command = shlex.join(["uv", "run", "robot-call", "--url", args.url])
     context = (
         f"Robot setup for this conversation\n\nRepository: {repo}\n"
         f"Recorder endpoint: {args.url}\n"

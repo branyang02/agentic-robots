@@ -24,16 +24,22 @@ cameras, and gripper calibration. Save `ROBOT_ID`, `LEFT_CAN`, `RIGHT_CAN`,
 Run the following commands from the repository root on the robot computer.
 
 Install dependencies with `uv sync --locked` **before starting hardware control**.
-The commands below use `.venv/bin/python` directly to avoid updating a controller's
-environment while it holds the arms. After installation, `uv run robot-init` and
-`uv run robot-record` are equivalent entry points, but can synchronize dependencies.
+Use `uv run <command>` for project commands and tests. It prepares the project
+environment and its console commands automatically; manual activation is unnecessary.
+See the [official running-commands guide](https://docs.astral.sh/uv/concepts/projects/run/).
+
+uv prefers versions already recorded in `uv.lock`; normal runs do not automatically
+upgrade packages merely because newer releases exist. `--locked` requires the lockfile
+to match the project, while `--no-sync` skips environment synchronization. Use these
+options when specifically needed, rather than adding them to every command. See
+[locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/).
 
 Inspect an existing controller first:
 
 ```bash
 mkdir -p outputs
 printf '{"operation":"status"}\n' > outputs/session-status.json
-.venv/bin/python -m scripts.robot_call session --url http://127.0.0.1:8767/mcp \
+uv run robot-call session --url http://127.0.0.1:8767/mcp \
   --arguments outputs/session-status.json
 ```
 
@@ -52,7 +58,7 @@ set -e
 set -a
 source .env
 set +a
-exec .venv/bin/robot-bridge --port 8767
+exec uv run robot-bridge --port 8767
 '
 ```
 
@@ -66,7 +72,7 @@ set -e
 set -a
 source .env
 set +a
-exec .venv/bin/python -m scripts.robot_record --output-root outputs/rollouts --port 8768
+exec uv run robot-record --output-root outputs/rollouts --port 8768
 '
 ```
 
@@ -88,12 +94,6 @@ wait.” Use that conversation ID, which identifies the exact task, not a shared
 root/session ID from a fork. Wait until the conversation is idle, then run:
 
 ```bash
-.venv/bin/python -m scripts.robot_init --thread-id YOUR_CONVERSATION_ID
-```
-
-Or, with the environment already installed and no dependency changes pending:
-
-```bash
 uv run robot-init --thread-id YOUR_CONVERSATION_ID
 ```
 
@@ -113,7 +113,7 @@ This delivers a setup message through the app's `send_message_to_thread` tool; i
 does not replace Codex's built-in system instructions. The message remains in the
 conversation context for later tasks. You do not need to paste robot instructions
 or manually refresh its tools. The agent uses native MCP tools when configured for
-the supplied endpoint, or the same tools through `python -m scripts.robot_call`.
+the supplied endpoint, or the same tools through `uv run robot-call`.
 
 The desktop adapter reuses the installed `codex-app-tools` MCP plugin. It uses
 `CODEX_APP_TOOLS_PIPE_PATH` when available, otherwise discovers the app-tools socket
@@ -197,9 +197,9 @@ supported `session release` removes torque. Closing a client is not a motion sto
 ## Tests
 
 ```bash
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-.venv/bin/pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
 ```
 
 The default suite uses mocks or simulated arms and a fake desktop. HTTP subprocesses
@@ -214,7 +214,7 @@ starts the real hardware bridge. Reserve the conversation for the test until it 
 
 ```bash
 ROBOT_CODEX_E2E_THREAD_ID=YOUR_TEST_CONVERSATION_ID \
-  .venv/bin/pytest -q -s tests/test_robot_agent_e2e.py
+  uv run pytest -q -s tests/test_robot_agent_e2e.py
 ```
 
 The test runs the initializer CLI, checks that initialization caused no recording or

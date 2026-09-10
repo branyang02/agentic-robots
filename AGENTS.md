@@ -3,6 +3,12 @@
 Keep the implementation minimal. The current Codex conversation supplies decisions;
 do not add a second LLM, a task planner, or hidden motion routines to the bridge.
 
+Prefer uv for Python workflows: `uv run <command>` for project tools and tests,
+`uv add` / `uv remove` for dependencies, and `uv sync` for environment setup.
+Use the project's console commands, such as `uv run robot-init`, by default.
+Only add `--no-sync` when there is a concrete need to skip environment synchronization.
+Consult the [official uv docs](https://docs.astral.sh/uv/) for uv behavior and options.
+
 For robot operation, initialize the conversation with `robot-init` as described in
 `docs/agentic-runs.md`. The canonical initialization prompt is
 `scripts/robot_agent.md`; keep behavioral instructions there instead of duplicating

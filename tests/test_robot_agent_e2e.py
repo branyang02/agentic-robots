@@ -8,7 +8,6 @@ import asyncio
 import json
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -58,9 +57,9 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path):  
     env = {k: v for k, v in os.environ.items() if k != "CODEX_APP_TOOLS_PIPE_PATH"}
     initialized = subprocess.run(
         [
-            sys.executable,
-            "-m",
-            "scripts.robot_init",
+            "uv",
+            "run",
+            "robot-init",
             "--thread-id",
             THREAD,
             "--url",

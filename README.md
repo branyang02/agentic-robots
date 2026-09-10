@@ -252,9 +252,9 @@ Keep the existing motor bridge running. Start a persistent recording endpoint wi
 the camera environment variables exported, then initialize a local Codex conversation:
 
 ```bash
-.venv/bin/python -m scripts.robot_record --output-root outputs/rollouts
+uv run robot-record --output-root outputs/rollouts
 # In another terminal, while the target conversation is idle:
-.venv/bin/python -m scripts.robot_init --thread-id YOUR_CONVERSATION_ID
+uv run robot-init --thread-id YOUR_CONVERSATION_ID
 ```
 
 The recorder starts idle. After initialization acknowledges, send the task as an

@@ -51,7 +51,9 @@ def http_robot(tmp_path):
         file.write_text(json.dumps(arguments or {}))
         output = tmp_path / f"response-{number}.json"
         cmd = [
-            str(root / ".venv/bin/robot-call"),
+            "uv",
+            "run",
+            "robot-call",
             tool,
             "--url",
             f"http://127.0.0.1:{port}/mcp",
