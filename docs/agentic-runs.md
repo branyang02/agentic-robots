@@ -46,9 +46,42 @@ uv run robot-call session --url http://127.0.0.1:8767/mcp \
 Reuse connected, healthy sessions. Do not kill or restart a bridge holding enabled
 arms. Changing source files does not update code already loaded into that process.
 
-## Start the services once
+## Start the controller and recorder
 
-For a **new controller only**, this Ubuntu user service starts disconnected:
+For a **new controller only**, run this from the repository root in one terminal:
+
+```bash
+uv run --env-file .env robot-bridge --port 8767
+```
+
+Stop other camera viewers, then run the recorder in a second terminal:
+
+```bash
+uv run --env-file .env robot-record --output-root outputs/rollouts --port 8768
+```
+
+uv loads the hardware settings from `.env`; no manual environment activation or
+shell exports are needed. Keep both terminals running throughout the task.
+The controller starts disconnected and enables no motors until the agent starts
+an authorized session. Systemd is optional. For terminal disconnections, run these
+commands inside a persistent terminal session or use the background services below.
+
+The recorder starts **idle**: it opens no cameras and enables no motors. It creates
+a fresh directory and starts capture when the agent calls `recording(start, text)`.
+`recording(finish)` finalizes that task's video and releases camera streams while
+leaving the recorder process and motor sessions running. No recorder restart or
+manually prepared task prompt file is needed between tasks.
+
+After a task, the agent verifies both arms have returned to neutral and retains
+powered hold for the next task. For shutdown, request release after that verification,
+then stop the processes. An interrupted task does not establish neutral; do not
+close the controller's terminal while an arm still needs powered support.
+
+<details>
+<summary>Optional background services with systemd (Ubuntu)</summary>
+
+Use these instead of the terminal commands when you want background processes and
+journal logs. Start them only when no existing controller or recorder owns the hardware.
 
 ```bash
 systemd-run --user --unit=agentic-robot-bridge \
@@ -76,13 +109,10 @@ exec uv run robot-record --output-root outputs/rollouts --port 8768
 '
 ```
 
-The recorder starts **idle**: it opens no cameras and enables no motors. It creates
-a fresh directory and starts capture when the agent calls `recording(start, text)`.
-`recording(finish)` finalizes that task's video and releases camera streams while
-leaving the recorder service and motor sessions running. No recorder restart or
-manually prepared task prompt file is needed between tasks.
-
 Inspect startup with `journalctl --user -u agentic-robot-record -n 30 --no-pager`.
+
+</details>
+
 Override the motor endpoint with `--upstream` when needed. During a recording, all
 observations and actions go through the recorder; it owns the three camera streams.
 
@@ -103,6 +133,8 @@ endpoint to that existing conversation, and waits for an exact acknowledgment.
 The agent replies `Robot ready [init:…]` and waits. Initialization does not start
 capture, enable motors, or move the arms. Its receipt, including the exact prompt,
 acknowledgment, and turn ID, is saved in `outputs/robot-init/<conversation-id>.json`.
+After updating the agent instructions, initialize an idle conversation again to
+load them; the hardware processes do not need a restart.
 
 If new motor sessions are needed and the arms are physically supported, add
 `--startup-supported` to authorize their later startup. This flag enables no motors
@@ -134,7 +166,7 @@ Codex's sandbox or approval settings.
 
 In that initialized conversation, send:
 
-> Close the grippers, draw a heart shape with both arms, and return to neutral.
+> Close the grippers and draw a heart shape with both arms.
 
 Or use the included [camera target practice task](prompts/camera-target-practice.txt).
 The agent automatically starts recording with the task text, then repeats:
@@ -144,8 +176,13 @@ The agent automatically starts recording with the task text, then repeats:
 3. Execute the action and inspect the result and subsequent observations.
 4. Evaluate progress and self-correct until finished or a failure prevents continuation.
 
-It performs the requested neutral return (six zero joints per arm), takes final
-observations, finishes the video, and reports the result with a video link. Send
+Returning both arms to neutral (six zero joint targets per arm) is part of every
+task, including the example above which does not request a return. The agent verifies
+fresh measured joints and images after motion ends, then finishes the video and
+reports the result, final joint feedback, and a video link. This is an agent completion
+instruction; neither the bridge nor recorder executes a hidden return routine.
+If return or verification fails, the agent reports the task as incomplete and retains
+powered hold. A finished video alone does not mean the arms are neutral. Send
 another task in the same conversation to create another recording. The output root
 contains a unique timestamp/ID directory for every attempt. Previous attempts remain
 available for comparison. Task evaluation is done by this same Codex conversation.
@@ -219,6 +256,8 @@ ROBOT_CODEX_E2E_THREAD_ID=YOUR_TEST_CONVERSATION_ID \
 
 The test runs the initializer CLI, checks that initialization caused no recording or
 motion, sends two tasks in successive turns, and verifies both recordings, actions,
-observations, neutral joints, closed jaws, and retained sessions. It is skipped in
-ordinary CI because CI has no signed-in desktop app. Software and synthetic video
-tests do not validate physical dynamics or visual robot accuracy.
+observations, neutral joints, closed jaws, and retained sessions. Neither task asks
+for a neutral return; the test checks that initialization supplies this behavior and
+that the agent observes both arms at neutral after motion and before finishing.
+It is skipped in ordinary CI because CI has no signed-in desktop app. Software and
+synthetic video tests do not validate physical dynamics or visual robot accuracy.

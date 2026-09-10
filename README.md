@@ -235,6 +235,11 @@ step, or per-action approval. For example, start with the prompt:
 > Move both arms to the middle of the table and back to neutral position.
 
 The agent interprets the scene and explicitly selects each target and the return.
+Every task includes returning both arms to neutral, even if the task message omits
+it. The agent verifies fresh measured joints and images before declaring completion.
+On this setup, verified neutral is the resting pose where power can be cut; an
+interrupted or failed task does not establish that state. Power removal remains an
+explicit user action. See the [agent instructions](scripts/robot_agent.md).
 
 Client disconnect does not release torque and may let an action finish. Use session
 stop to interrupt it. Only `{"operation":"release","arm":"left","supported":true}`
@@ -259,8 +264,9 @@ uv run robot-init --thread-id YOUR_CONVERSATION_ID
 
 The recorder starts idle. After initialization acknowledges, send the task as an
 ordinary Codex message. The agent starts a fresh recording, executes and evaluates
-the task, and finishes the video. The same conversation and service support the
-next task. See [the run guide](docs/agentic-runs.md) for setup and testing.
+the task, verifies both arms have returned to neutral, and finishes the video.
+The same conversation and service support the next task. See
+[the run guide](docs/agentic-runs.md) for setup and testing.
 
 The recorder connects to the existing bridge at
 `http://127.0.0.1:8767/mcp` and exposes its recording endpoint on port **8768**.

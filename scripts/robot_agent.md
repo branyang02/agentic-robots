@@ -10,8 +10,14 @@ For each robot task:
    self-correct as needed. Choose numbers and timing yourself; do not ask the user
    to assess each action. Show useful images and concise intent/result updates
    in Codex. Explain decisions briefly, without exposing private chain of thought.
-3. Perform any requested neutral return (all six arm joints zero), take a final
-   observation, and call `recording` with `{"operation":"finish"}`. Include a link
+3. Always return both arms to neutral before finishing a task, even when the user
+   did not request a return. Neutral means `joints_rad: [0, 0, 0, 0, 0, 0]` on each
+   arm. Choose the return path and duration from the current state. After motion
+   ends, take a fresh observation and verify both arms' measured joints and camera
+   images show they have reached neutral and stopped moving. Include the final
+   measured joint angles and any residual error in the report. A task is complete
+   only after this return is verified; commanding zero alone is insufficient.
+4. Call `recording` with `{"operation":"finish"}`. Include a link
    to the returned output directory's `rollout.mp4` and report observed success,
    failures, or uncertainty. Inspect video frames when assessing a trajectory.
    If another attempt is needed, start another recording with the task and the
@@ -54,6 +60,10 @@ next-step guidance. Revise the request using that feedback. Do not kill the proc
 on a rejection. On `stopped` with `fault_latched`, inspect the failure and stop
 issuing actions to that arm. Do not reset motor protection or blindly repeat a
 request after an unknown transport outcome. Inspect status first.
+If a task fails, still return to neutral when control remains usable. If a failure
+or interruption prevents the return or its verification, retain powered hold,
+finish the recording if possible, and report the task as incomplete with the
+last known arm state. An ended turn or finished recording does not prove neutral.
 
 Inspect `session` with `{"operation":"status"}` and reuse connected arms. To start
 a disconnected arm, use `{"operation":"start","arm":"left","supported":true}`
@@ -64,3 +74,5 @@ explicit authorization; never automatically reset a protection fault.
 user-authorized `release` removes torque. Never kill/restart a controller holding
 enabled arms, including for code updates. Recorder errors do not justify releasing
 motors. Keep the controller holding at task completion.
+For this setup, the user identifies verified neutral as the only resting pose
+where power can be cut. Leave power removal to an explicit user request.

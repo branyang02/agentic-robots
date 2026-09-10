@@ -47,6 +47,24 @@ def assert_task_trace(log, number):
             )
             for side, actual in completed
         ), "Require observed effects, not just requests"
+    observed_at, final = next(
+        (i, e["observation"])
+        for i, e in reversed(list(enumerate(log)))
+        if e["kind"] == "observation"
+    )
+    last_action = max(
+        i for i, e in enumerate(log) if e["kind"] == "response" and e.get("tool") == "execute"
+    )
+    finished_at = next(i for i, e in enumerate(log) if e["kind"] == "recording_finished")
+    assert last_action < observed_at < finished_at, "Verify neutral after motion, before finishing"
+    assert set(final["arms"]) == {"left", "right"}
+    assert not final["faults"]
+    assert all(
+        state["joints_rad"] == pytest.approx([0] * 6, abs=1e-6)
+        and state["velocity_rad_s"] == pytest.approx([0] * 6, abs=1e-6)
+        and state["healthy"]
+        for state in final["arms"].values()
+    ), "The agent must observe both arms stationary at neutral before declaring completion"
 
 
 @pytest.mark.skipif(not THREAD, reason="Opt in with an idle local Codex test conversation ID")
@@ -112,12 +130,11 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path):  
                 await asyncio.sleep(3)
             pytest.fail("Codex did not finish the simulated task; inspect the test conversation")
 
+    # Neither task asks for a neutral return: the initialization must supply it.
     prompts = [
-        "Close both grippers, move both arms away from neutral, "
-        "and then return both arms to neutral. "
+        "Close both grippers and move both arms a little away from their starting positions. "
         "Verify the result from the available observations.",
-        "Open both grippers, then close them again. "
-        "Keep both arms at neutral and verify the result.",
+        "Open both grippers, then close them again. Verify the result.",
     ]
     for number, prompt in enumerate(prompts, 1):
         asyncio.run(task(prompt, number))
