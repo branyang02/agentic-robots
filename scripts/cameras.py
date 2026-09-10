@@ -38,7 +38,7 @@ def discover():
     return cameras
 
 
-def configured_cameras():
+def configured_cameras(roles=("left", "right", "top")):
     return {
         role: dict(
             device=os.environ[f"{role.upper()}_CAMERA"],
@@ -46,7 +46,7 @@ def configured_cameras():
             width=640 if role == "top" else 1280,
             height=480 if role == "top" else 720,
         )
-        for role in ("left", "right", "top")
+        for role in roles
     }
 
 

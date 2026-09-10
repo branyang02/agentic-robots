@@ -5,6 +5,7 @@ description = "Minimal dual-YAM hardware setup."
 requires-python = ">=3.11"
 dependencies = [
   "i2rt @ git+https://github.com/AfterQuery-Research/i2rt.git@7ed46f4e4e316133a0c39aa6cf34a73d2718e850",
+  "mcp>=2,<3",
 ]
 
 [dependency-groups]
@@ -32,6 +33,9 @@ view-cameras = "scripts.view_cameras:main"
 setup-can = "scripts.setup_can:main"
 setup-cameras = "scripts.cameras:main"
 calibrate-gripper = "scripts.calibrate:main"
+robot-bridge = "scripts.robot_mcp:main"
+robot-call = "scripts.robot_mcp:call_main"
+robot-record = "scripts.robot_record:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["scripts"]

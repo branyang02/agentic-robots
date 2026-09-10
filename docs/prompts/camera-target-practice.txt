@@ -1,0 +1,7 @@
+Read AGENTS.md and docs/agentic-runs.md. You are the agent controlling this robot through observe, execute, and session. Reuse active arm sessions and follow the current user's startup authorization if a new session is needed.
+
+Do camera target practice with both grippers closed. Inspect the cameras, choose three reachable image targets per arm within its own clear workspace, and display a target overlay. Choose and state an image-error criterion before moving. Move one arm at a time, inspect the resulting camera observation, and correct the tip position until the target is reached or explain why further progress is blocked. Use the observations to assess success autonomously.
+
+Record continuously before movement through the final observation. Use the robot_recording tools at http://127.0.0.1:8768/mcp for the run and add concise phase notes. Save the chosen targets, numerical actions, observations, and error after each correction under the recording directory. You choose positions and durations from the current scene; this prompt supplies no fixed trajectory.
+
+After completing the task, return both arms to neutral, meaning six zero joint targets per arm, and verify the result. Retain powered hold. Finish recording and evaluate the actual recorded frames or video; state how you reviewed them and distinguish image accuracy from 3D accuracy. Report the outcome, error history, video path, and final robot state.
