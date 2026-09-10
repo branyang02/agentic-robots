@@ -23,17 +23,6 @@ cameras, and gripper calibration. Save `ROBOT_ID`, `LEFT_CAN`, `RIGHT_CAN`,
 `.env` file. Calibration stays local in `calibration/<ROBOT_ID>.json`.
 Run the following commands from the repository root on the robot computer.
 
-Install dependencies with `uv sync --locked` **before starting hardware control**.
-Use `uv run <command>` for project commands and tests. It prepares the project
-environment and its console commands automatically; manual activation is unnecessary.
-See the [official running-commands guide](https://docs.astral.sh/uv/concepts/projects/run/).
-
-uv prefers versions already recorded in `uv.lock`; normal runs do not automatically
-upgrade packages merely because newer releases exist. `--locked` requires the lockfile
-to match the project, while `--no-sync` skips environment synchronization. Use these
-options when specifically needed, rather than adding them to every command. See
-[locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/).
-
 Inspect an existing controller first:
 
 ```bash
@@ -60,8 +49,7 @@ Stop other camera viewers, then run the recorder in a second terminal:
 uv run --env-file .env robot-record --output-root outputs/rollouts --port 8768
 ```
 
-uv loads the hardware settings from `.env`; no manual environment activation or
-shell exports are needed. Keep both terminals running throughout the task.
+Keep both terminals running throughout the task.
 The controller starts disconnected and enables no motors until the agent starts
 an authorized session. Systemd is optional. For terminal disconnections, run these
 commands inside a persistent terminal session or use the background services below.
