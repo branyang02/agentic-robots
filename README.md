@@ -5,7 +5,6 @@ Includes an observation/action bridge for Codex. The agent is the Codex conversa
 
 To run an autonomous task with camera observations, numerical actions, feedback
 corrections, and a complete video, follow [Run an agentic task](docs/agentic-runs.md).
-It includes the two terminal commands and a camera target practice task.
 
 Python 3.11, uv, Ruff, pytest. Hardware uses i2rt pinned to
 `7ed46f4e4e316133a0c39aa6cf34a73d2718e850`; MCP exposes tools to the agent.

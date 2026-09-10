@@ -124,7 +124,6 @@ In that initialized conversation, send:
 
 > Close the grippers and draw a heart shape with both arms.
 
-Or use the included [camera target practice task](prompts/camera-target-practice.txt).
 The agent automatically starts recording with the task text, then repeats:
 
 1. Observe camera images and useful joint feedback.
