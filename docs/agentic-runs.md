@@ -77,7 +77,7 @@ set -e
 set -a
 source .env
 set +a
-exec .venv/bin/robot-record \
+exec .venv/bin/python -m scripts.robot_record \
   --prompt-file docs/prompts/camera-target-practice.txt \
   --output outputs/rollouts/camera-practice-001 \
   --port 8768
