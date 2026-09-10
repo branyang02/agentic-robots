@@ -147,6 +147,33 @@ def test_idle_recorder_uses_no_cameras_and_reports_how_to_start(tmp_path, monkey
     assert not (tmp_path / "absent").exists()
 
 
+@pytest.mark.parametrize("state", ["finished", "failed"])
+def test_completed_recordings_stay_unchanged_during_idle_calls(rollout, monkeypatch, state):
+    ready_fake(rollout)
+    rollout.state = state
+    rollout.process.poll.return_value = 0
+    rollout.save_manifest()
+    before = {p: p.read_bytes() for p in rollout.output.rglob("*") if p.is_file()}
+    current = {"arms": {"left": {"joints_rad": [0.2, 0, 0, 0, 0, 0]}}}
+    upstream = Mock(return_value=current)
+    monkeypatch.setattr("scripts.robot_record.upstream_call", upstream)
+    bridge = RecordingBridge(rollout)
+
+    observation = bridge.observe()
+    assert observation["images"] == {}, "Do not pair old camera frames with live joint feedback"
+    assert observation["arms"] == current["arms"]
+    assert "recording" in observation["errors"]
+    assert bridge.session("status")["arms"] == current["arms"]
+    bridge.session("stop")
+    assert upstream.call_args.args[2]["operation"] == "stop"
+    upstream.reset_mock()
+    rejected = bridge.execute(Action(arm="left", kind="joint_target", joints_rad=[0] * 6))
+    assert rejected["error"]["code"] == "recording_unavailable"
+    upstream.assert_not_called()
+    after = {p: p.read_bytes() for p in rollout.output.rglob("*") if p.is_file()}
+    assert after == before, "Idle calls must not modify a completed task's files"
+
+
 def test_recording_rejects_overlapping_starts_and_finish_during_action(rollout):
     ready_fake(rollout)
     bridge = RecordingBridge(rollout)

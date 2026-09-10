@@ -55,7 +55,9 @@ def make_server(bridge):
     async def observe() -> CallToolResult:
         """Return available camera images, current joints, timestamps, and per-device errors.
 
-        Images are optional. The agent decides whether another observation is needed.
+        The motor bridge captures available cameras on request. The recorder returns
+        snapshots from an active recording; start recording first to get its images.
+        The agent decides whether another observation is needed.
         Does not enable motors; can run while actions are executing.
         """
         observation = json_ready(await asyncio.to_thread(bridge.observe))
@@ -81,6 +83,8 @@ def make_server(bridge):
         Deltas use the measured state at execution. World calibration is unavailable.
         duration_s is the requested positive duration of linear joint interpolation (default 5).
         No action size, speed/acceleration cap, time stretching, or observation prerequisite.
+        Through the recorder, execution requires an active recording with all three
+        camera streams fresh. Call recording(start, text=<user task>) first.
         Checks command validity, joint limits, sampled self-collision, and control health.
         completed means commands were sent, not that the task succeeded; inspect actual and
         joint_error_rad. rejected can be revised; stopped with fault_latched requires attention.

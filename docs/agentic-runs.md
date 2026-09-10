@@ -58,6 +58,8 @@ a fresh directory and starts capture when the agent calls `recording(start, text
 `recording(finish)` finalizes that task's video and releases camera streams while
 leaving the recorder process and motor sessions running. No recorder restart or
 manually prepared task prompt file is needed between tasks.
+Between tasks, observations return live joint feedback without camera images;
+completed recordings are left unchanged.
 
 After a task, the agent verifies both arms have returned to neutral and retains
 powered hold for the next task. For shutdown, request release after that verification,
@@ -208,8 +210,9 @@ ROBOT_CODEX_E2E_THREAD_ID=YOUR_TEST_CONVERSATION_ID \
   uv run pytest -q -s tests/test_robot_agent_e2e.py
 ```
 
-The test runs the initializer CLI, checks that initialization caused no recording or
-motion, sends two tasks in successive turns, and verifies both recordings, actions,
+The test discovers the desktop app from an ordinary terminal, runs the initializer
+CLI, checks that initialization caused no recording or motion, sends two tasks in
+successive turns, and verifies both recordings, actions,
 observations, neutral joints, closed jaws, and retained sessions. Neither task asks
 for a neutral return; the test checks that initialization supplies this behavior and
 that the agent observes both arms at neutral after motion and before finishing.

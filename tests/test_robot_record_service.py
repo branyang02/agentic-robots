@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -108,6 +109,9 @@ def test_two_tasks_reuse_http_service_and_preserve_hold(http_recorder):
                 assert result["status"] == "completed"
         assert len(call("observe")["images"]) == 3
         assert call("recording", {"operation": "finish"})["status"] == "finished"
+        directory = Path(directories[-1])
+        finished_files = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+        assert call("observe")["images"] == {}
         result = call(
             "execute",
             {"action": {"arm": "left", "kind": "joint_target", "joints_rad": [0] * 6}},
@@ -119,6 +123,7 @@ def test_two_tasks_reuse_http_service_and_preserve_hold(http_recorder):
             s["joints_rad"] == [0] * 6
             for s in call("session", {"operation": "status"})["arms"].values()
         )
+        assert {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()} == finished_files
     assert len(set(directories)) == 2
     for directory in output.iterdir():
         assert frame(directory / "rollout.mp4").size == (1920, 516)

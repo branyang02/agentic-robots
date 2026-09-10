@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from mcp import Client
 
-from scripts.robot_init import Args, app_call, app_transport
+from scripts.robot_init import Args, app_call, locate_app
 from tests.test_robot_http import http_robot  # noqa: F401
 from tests.test_robot_record import frame
 from tests.test_robot_record_service import http_recorder  # noqa: F401
@@ -68,11 +68,11 @@ def assert_task_trace(log, number):
 
 
 @pytest.mark.skipif(not THREAD, reason="Opt in with an idle local Codex test conversation ID")
-def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path):  # noqa: F811
+def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, monkeypatch):  # noqa: F811
     call, url, output, recorder, controller, root = http_recorder
     args = Args(THREAD, repo=root, url=url, startup_supported=True)
-    # Test socket discovery as from a normal terminal, without the agent's pipe environment.
-    env = {k: v for k, v in os.environ.items() if k != "CODEX_APP_TOOLS_PIPE_PATH"}
+    # Exercise the entire flow from an ordinary terminal, including follow-up task delivery.
+    monkeypatch.delenv("CODEX_APP_TOOLS_PIPE_PATH", raising=False)
     initialized = subprocess.run(
         [
             "uv",
@@ -85,7 +85,6 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path):  
             "--startup-supported",
         ],
         cwd=root,
-        env=env,
         capture_output=True,
         text=True,
         timeout=240,
@@ -98,7 +97,7 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path):  
     assert not output.exists(), "Initialization must not start capture or move hardware"
 
     async def task(prompt, number):
-        async with Client(app_transport(args), read_timeout_seconds=60) as app:
+        async with Client(await locate_app(args), read_timeout_seconds=60) as app:
             previous = await app_call(
                 app,
                 THREAD,

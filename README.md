@@ -5,7 +5,7 @@ Includes an observation/action bridge for Codex. The agent is the Codex conversa
 
 To run an autonomous task with camera observations, numerical actions, feedback
 corrections, and a complete video, follow [Run an agentic task](docs/agentic-runs.md).
-It includes persistent process setup and a ready-to-paste camera target practice prompt.
+It includes the two terminal commands and a camera target practice task.
 
 Python 3.11, uv, Ruff, pytest. Hardware uses i2rt pinned to
 `7ed46f4e4e316133a0c39aa6cf34a73d2718e850`; MCP exposes tools to the agent.
@@ -120,27 +120,20 @@ uv run calibrate-gripper right
 ```
 
 Each command asks you to type the side before starting. Limits are saved to
-`calibration/dual-yam.json`; previous values are backed up. Calibrate once per physical setup,
-then again only when the gripper or calibration changes.
+`calibration/<ROBOT_ID>.json` (`dual-yam` by default); previous values are backed up.
+Calibrate once per physical setup, then again only when the gripper or calibration changes.
 
 ## Agent observation/action loop
 
-Start the local bridge with the hardware environment variables above exported:
+Use [the run guide](docs/agentic-runs.md) to start the controller and recorder,
+initialize Codex, and send tasks. All calls for an agentic task use the recorder
+(port **8768** by default). `robot-init` supplies its address and the CLI commands; optional
+native MCP connections are configured in `.codex/config.toml`.
 
-```bash
-uv run robot-bridge --port 8767
-```
-
-Port 8767 is the default. The bridge starts disconnected: no motors are enabled.
-Its three MCP tools are `observe`, `execute`, and `session`. Project MCP configuration is in
-`.codex/config.toml`; if the host does not load project configuration, register it:
-
-```bash
-codex mcp add robot --url http://127.0.0.1:8767/mcp
-```
-
-Reload the MCP connection in Codex when needed. For an already-running turn whose
-tool catalog cannot reload, `robot-call` invokes exactly the same MCP tools:
+The motor bridge on port **8767** provides `observe`, `execute`, and `session`.
+It starts disconnected, with no motors enabled. The following direct bridge calls
+are for manual inspection and control outside a recorded task. During a recording,
+use port 8768 so the recorder owns camera access and logs the actions.
 
 ```bash
 uv run robot-call observe --url http://127.0.0.1:8767/mcp --output outputs/observation.json
@@ -151,17 +144,20 @@ uv run robot-call execute --url http://127.0.0.1:8767/mcp --arguments action.jso
 Example `session.json`:
 
 ```json
-{"operation":"start","arm":"left","supported":true,"reset_communication":true}
+{"operation":"start","arm":"left","supported":true}
 ```
 
-`supported` asserts physical startup support. The optional reset allows one
-communication-timeout reset during startup, never a motor protection reset.
+`supported` asserts physical startup support. Add `reset_communication: true` only
+when a communication-timeout reset during startup is explicitly authorized. It
+never permits a motor protection reset.
 Startup failure may leave some motors enabled; maintain support. The bridge does
 not calibrate grippers. They start with zero effort until an explicit
 `gripper_target` action enables jaw position control.
 
 `observe` returns available image blocks, capture time bounds, current joints and
-temperatures, and per-device errors. Missing/dark cameras do not block actions.
+temperatures, and per-device errors. Direct bridge actions do not require camera
+images. The recorder requires fresh frames from all three streams before forwarding
+motion; neither endpoint checks image brightness.
 Images are not hardware-synchronized; world-to-camera calibration is absent.
 Observation does not enable motors and can run while an action is executing.
 
@@ -171,8 +167,8 @@ Example `action.json`:
 {"action":{"arm":"left","kind":"joint_delta","joints_rad":[0.05,0,0,0,0,0],"duration_s":6}}
 ```
 
-The four action kinds are `joint_target`, `joint_delta`, `ee_target`, and `ee_delta`.
-There is also `gripper_target`, taking `gripper_opening` from 0 (closed) to 1 (open)
+The five action kinds are `joint_target`, `joint_delta`, `ee_target`, `ee_delta`,
+and `gripper_target`. Gripper actions take `gripper_opening` from 0 (closed) to 1 (open)
 and `duration_s`. Jaw actions preserve arm hold; arm actions preserve the last jaw
 target. Jaw control uses the pinned driver's gripper gains and force limiter.
 Check the returned `gripper_error` and images to assess whether closure succeeded.
@@ -263,8 +259,10 @@ uv run robot-init --thread-id YOUR_CONVERSATION_ID
 ```
 
 The recorder starts idle. After initialization acknowledges, send the task as an
-ordinary Codex message. The agent starts a fresh recording, executes and evaluates
-the task, verifies both arms have returned to neutral, and finishes the video.
+ordinary Codex message. If new motor sessions need supported startup, initialize
+with `--startup-supported` as described in the run guide. The agent starts a fresh
+recording, executes and evaluates the task, verifies both arms have returned to
+neutral, and finishes the video.
 The same conversation and service support the next task. See
 [the run guide](docs/agentic-runs.md) for setup and testing.
 
@@ -298,6 +296,8 @@ The additional `recording` tool takes one of these argument objects:
 Phase notes are logged and displayed in the video. After the task and its final
 observation, call `finish`; it refuses while an action through the recorder is
 still in flight. It keeps serving and accepts another `start` for the next task.
+Between tasks, `observe` returns live joint feedback without camera images, and
+controller calls leave completed recordings unchanged.
 The resulting directory contains:
 
 - `rollout.mp4`: the continuous left / top / right camera video, with elapsed time

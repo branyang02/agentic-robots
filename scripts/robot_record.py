@@ -152,6 +152,8 @@ class Rollout:
 
     def event(self, kind, **data):
         with self.lock:
+            if self.state in {"finished", "failed"} and kind != "recording_finished":
+                return  # Completed task files are closed to subsequent/late client calls.
             record = json_ready(
                 {
                     "kind": kind,
@@ -251,28 +253,31 @@ class Rollout:
         }
 
     def snapshots(self):
-        images, errors = {}, {}
-        directory = self.output / "observations" / uuid.uuid4().hex
-        directory.mkdir(parents=True)
-        for role in ORDER:
-            try:
-                # Open pins the inode while FFmpeg atomically publishes the next frame.
-                with (self.output / f"{role}.png").open("rb") as source:
-                    published = os.fstat(source.fileno()).st_mtime
-                    path = directory / f"{role}.png"
-                    path.write_bytes(source.read())
-                with Image.open(path) as frame:
-                    frame.load()
-                    images[role] = {
-                        "path": str(path),
-                        "width": frame.width,
-                        "height": frame.height,
-                        "published_unix": published,
-                        "age_s": time.time() - published,
-                    }
-            except (OSError, ValueError) as exc:
-                errors[f"camera:{role}"] = str(exc)
-        return images, errors
+        with self.activity:  # Finish must wait for any snapshot files being published.
+            if self.state != "recording":
+                return {}, {"recording": "Start recording for images"}
+            images, errors = {}, {}
+            directory = self.output / "observations" / uuid.uuid4().hex
+            directory.mkdir(parents=True)
+            for role in ORDER:
+                try:
+                    # Open pins the inode while FFmpeg atomically publishes the next frame.
+                    with (self.output / f"{role}.png").open("rb") as source:
+                        published = os.fstat(source.fileno()).st_mtime
+                        path = directory / f"{role}.png"
+                        path.write_bytes(source.read())
+                    with Image.open(path) as frame:
+                        frame.load()
+                        images[role] = {
+                            "path": str(path),
+                            "width": frame.width,
+                            "height": frame.height,
+                            "published_unix": published,
+                            "age_s": time.time() - published,
+                        }
+                except (OSError, ValueError) as exc:
+                    errors[f"camera:{role}"] = str(exc)
+            return images, errors
 
     def finish(self):
         with self.activity:
