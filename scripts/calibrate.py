@@ -1,15 +1,24 @@
 """Calibrate one YAM gripper under supervision."""
 
-import argparse
 import json
 import math
 import os
 import shutil
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+import tyro
 
 from scripts.setup_can import inventory, ready, resolve
+
+
+@dataclass
+class Args:
+    side: tyro.conf.Positional[Literal["left", "right"]]
+    """Arm whose gripper will be calibrated."""
 
 
 def save_limits(path, side, serial, limits):
@@ -50,9 +59,7 @@ def close_robot(robot):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("side", choices=["left", "right"])
-    args = parser.parse_args()
+    args = tyro.cli(Args, description=__doc__)
     robot_id = os.environ.get("ROBOT_ID", "dual-yam")
     serial = os.environ[f"{args.side.upper()}_CAN"]
     row = resolve(serial, inventory())

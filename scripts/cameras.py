@@ -1,13 +1,22 @@
 """Discover cameras, save previews, or test all configured RGB streams at 30 FPS."""
 
-import argparse
 import concurrent.futures
 import json
 import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+import tyro
+
+
+@dataclass
+class Args:
+    command: tyro.conf.Positional[Literal["list", "preview", "check"]]
+    """Discover cameras, save previews, or check configured frame rates."""
 
 
 def formats(device):
@@ -139,9 +148,7 @@ def capture(name, camera, seconds):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["list", "preview", "check"])
-    args = parser.parse_args()
+    args = tyro.cli(Args, description=__doc__)
     if args.command == "list":
         for index, camera in enumerate(discover()):
             print(json.dumps(camera, indent=2))
