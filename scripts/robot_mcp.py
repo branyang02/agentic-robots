@@ -1,17 +1,36 @@
 """Local MCP tools for the current Codex agent; no LLM API or second agent."""
 
-import argparse
 import asyncio
 import base64
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import tyro
 from mcp import Client
 from mcp.server import MCPServer
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
 from scripts.robot_bridge import Action, Bridge, json_ready, write_result
+
+
+@dataclass
+class Args:
+    port: int = 8767
+    """Port for the local motor bridge's MCP server."""
+
+
+@dataclass
+class CallArgs:
+    tool: tyro.conf.Positional[Literal["observe", "execute", "session", "recording"]]
+    """MCP tool to call."""
+    arguments: Path | None = None
+    """JSON file containing tool arguments."""
+    output: Path | None = None
+    """Write the structured result to this JSON file."""
+    url: str = "http://127.0.0.1:8767/mcp"
+    """MCP endpoint for the bridge or recorder."""
 
 
 def structured(value):
@@ -99,20 +118,13 @@ def make_server(bridge):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=8767)
-    args = parser.parse_args()
+    args = tyro.cli(Args, description=__doc__)
     make_server(Bridge()).run(transport="streamable-http", host="127.0.0.1", port=args.port)
 
 
 def call_main():
     """Same MCP tools via CLI when the current Codex turn cannot reload its tool catalog."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tool", choices=["observe", "execute", "session", "recording"])
-    parser.add_argument("--arguments", type=Path, help="JSON file containing tool arguments")
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--url", default="http://127.0.0.1:8767/mcp")
-    args = parser.parse_args()
+    args = tyro.cli(CallArgs, description=call_main.__doc__)
 
     async def call():
         arguments = json.loads(args.arguments.read_text()) if args.arguments else {}

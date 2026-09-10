@@ -132,6 +132,12 @@ the client's configured permissions still apply to tool execution.
 
 ## Where the numbers and decisions go
 
+Command-line options, types, defaults, and help text are declared in dataclasses
+and parsed by [tyro](https://brentyi.github.io/tyro/). See `Args` and `CallArgs` in
+[`scripts/robot_mcp.py`](../scripts/robot_mcp.py), and `Args` in
+[`scripts/robot_record.py`](../scripts/robot_record.py). Run a command with `--help`
+to inspect its options without starting hardware or recording.
+
 Targets, frames, gripper openings, and durations are arguments to `execute`.
 For example, this is the shape of a small joint-delta request:
 

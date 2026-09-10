@@ -1,6 +1,5 @@
 """Record cameras and the agent's MCP rollout without owning or restarting motors."""
 
-import argparse
 import asyncio
 import json
 import os
@@ -9,9 +8,11 @@ import subprocess
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import tyro
 from mcp import Client
 from PIL import Image
 
@@ -20,6 +21,18 @@ from scripts.robot_bridge import RobotError, failure, json_ready, write_result
 from scripts.robot_mcp import make_server, structured
 
 ORDER = ("left", "top", "right")
+
+
+@dataclass
+class Args:
+    output: Path
+    """New rollout directory."""
+    prompt_file: Path
+    """Task prompt to save with the recording."""
+    upstream: str = "http://127.0.0.1:8767/mcp"
+    """Motor bridge's MCP endpoint."""
+    port: int = 8768
+    """Port for the recorder's MCP server."""
 
 
 def capture_command(cameras, output, epoch):
@@ -467,12 +480,7 @@ def recording_server(rollout):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="New rollout directory")
-    parser.add_argument("--prompt-file", type=Path, required=True)
-    parser.add_argument("--upstream", default="http://127.0.0.1:8767/mcp")
-    parser.add_argument("--port", type=int, default=8768)
-    args = parser.parse_args()
+    args = tyro.cli(Args, description=__doc__)
     rollout = Rollout(
         args.output, args.prompt_file.read_text().strip(), configured_cameras(), args.upstream
     )
