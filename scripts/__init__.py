@@ -1,1 +1,1 @@
-"""Hardware setup commands."""
+"""Runnable commands: CLI arguments, application workflows, and process lifecycle."""
