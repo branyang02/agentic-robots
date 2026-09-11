@@ -268,9 +268,13 @@ step, or per-action approval. For example, start with the prompt:
 The agent interprets the scene and explicitly selects each target and the return.
 Every task includes returning both arms to neutral, even if the task message omits
 it. The agent verifies fresh measured joints and images before declaring completion.
-On this setup, verified neutral is the resting pose where power can be cut; an
-interrupted or failed task does not establish that state. Power removal remains an
-explicit user action. See the [agent instructions](src/agentic_robots/robot_agent.md).
+On this setup, the user authorizes torque release without repeated approval once
+both arms are verified in the near-zero resting pose. Exact zero is unnecessary;
+the existing neutral tolerances apply. Finish and review an active recording before
+release, then recheck fresh feedback and the scene. See the canonical
+[release checks and procedure](src/agentic_robots/robot_agent.md). An interrupted task
+or stale feedback does not establish this condition. Session release disables motor
+torque; it does not switch off the external power supply.
 
 Client disconnect does not release torque and may let an action finish. Use session
 stop to interrupt it. Only `{"operation":"release","arm":"left","supported":true}`

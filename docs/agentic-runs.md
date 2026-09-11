@@ -62,10 +62,15 @@ manually prepared task prompt file is needed between tasks.
 Between tasks, observations return live joint feedback without camera images;
 completed recordings are left unchanged.
 
-After a task, the agent verifies both arms have returned to neutral and retains
-powered hold for the next task. For shutdown, request release after that verification,
-then stop the processes. An interrupted task does not establish neutral; do not
-close the controller's terminal while an arm still needs powered support.
+After a task, finish and review the recording before releasing motor sessions.
+For this setup, the user grants standing authorization to release both arms in the
+verified near-zero resting pose without asking again. Follow the canonical
+[release checks](../src/agentic_robots/robot_agent.md), including fresh stationary
+feedback and scene inspection immediately before release. Exact zero is unnecessary;
+the existing neutral tolerances apply. Retaining powered hold for the next task is
+also allowed. Release each session before stopping the controller; release disables
+torque, not the external power supply. An interrupted task or stale neutral result
+does not establish readiness to release.
 
 Override the motor endpoint with `--upstream` when needed. During a recording, all
 observations and actions go through the recorder; it owns the three camera streams.
