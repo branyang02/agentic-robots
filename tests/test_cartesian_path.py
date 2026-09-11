@@ -83,7 +83,7 @@ def test_execution_uses_full_path_and_preserves_jaw_and_duration():
     assert result["status"] == "completed"
     assert result["path"]["samples"] == len(arm.commands)
     assert not arm.gripper_commands
-    assert bridge.clock() == pytest.approx(0.4)
+    assert bridge.clock() == pytest.approx(0.4 + result["path"]["settling_s"])
     for q in arm.commands:
         pose = bridge.motion.fk(q, arm.opening)
         assert np.linalg.norm(pose[:2, 3] - first[:2, 3]) < 0.001
@@ -177,3 +177,50 @@ def test_cartesian_guard_detects_lag_below_joint_threshold_and_can_recover(final
     arm.command = original
     assert bridge.session("recover", arm="left")["status"] == "recovered"
     assert bridge.execute(command())["status"] == "completed"
+
+
+@pytest.mark.parametrize("mode", ["delayed", "frozen", "stale", "stop"])
+def test_endpoint_waits_for_fresh_feedback_and_remains_bounded(mode):
+    clock = ManualClock()
+    arm = FakeArm()
+    arm.q = np.deg2rad([0, 15, 30, 0, 20, 0])
+    pending = arm.q.copy()
+    writes = 0
+    bridge = Bridge(lambda: ({}, {}), clock=clock, sleep=lambda dt: None)
+    bridge.arms["left"] = arm
+    action = dict(
+        arm="left", kind="ee_delta", path="cartesian", position_m=[0, 0, 0.02], duration_s=0.2
+    )
+    count = len(bridge.motion.trajectory(Action(**action), arm.q, arm.opening))
+
+    def write(q):
+        nonlocal pending, writes
+        pending = q.copy()
+        writes += 1
+        arm.commands.append(q.copy())
+
+    def tick(dt):
+        clock.sleep(dt)
+        final = writes == count
+        if not final or mode != "frozen":
+            arm.q = pending.copy()
+        if final and mode == "stale":
+            arm.feedback_age = clock.now - 0.2 + 0.001
+        if final and mode == "stop":
+            bridge.stops["left"].set()
+
+    arm.command = write
+    bridge.sleep = tick
+    result = bridge.execute(action)
+    if mode == "delayed":
+        assert result["status"] == "completed"
+        assert result["path"]["settling_s"] >= 0.019
+    else:
+        assert result["status"] == "stopped"
+        expected = {
+            "frozen": "tracking_error",
+            "stale": "feedback_unavailable",
+            "stop": "stop_requested",
+        }
+        assert result["error"]["code"] == expected[mode]
+    assert clock.now <= 0.37

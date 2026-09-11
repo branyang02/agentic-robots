@@ -104,7 +104,11 @@ against 1 mm/0.5 degree model-space path tolerances. These are sampled geometric
 checks, not a guarantee of physical Cartesian tracking or obstacle clearance.
 Planning time is additional to `duration_s`; execution uses that duration without
 time stretching. Cartesian actions also compare measured-joint FK to the preceding command during
-execution and to the final command before completion. Error above 1 mm or 0.5 degree
+execution and to the final command before completion. At the endpoint it waits for
+feedback newer than the final command and allows up to 150 ms of settling, with
+health, stop, and 3-degree joint checks still active. The endpoint must satisfy the
+same Cartesian tolerance; a persistent error still stops the action. `path.settling_s`
+reports this additional time separately from the requested motion duration. Error above 1 mm or 0.5 degree
 stops with a recoverable `tracking_error` and `details.space: "cartesian"`; inspect,
 recover hold, and revise the action rather than blindly retrying. This stricter
 check may stop motions that stay inside the existing 3-degree joint threshold.

@@ -19,6 +19,7 @@ IK_POSITION_TOLERANCE = 0.001
 IK_ROTATION_TOLERANCE = np.deg2rad(0.5)
 FEEDBACK_TIMEOUT_S = 0.15
 TRACKING_ERROR_RAD = np.deg2rad(3)
+CARTESIAN_SETTLE_TIMEOUT_S = 0.15
 
 
 def json_ready(value):
@@ -690,10 +691,36 @@ class Bridge:
                 previous = command
                 if i < steps:
                     self.sleep(max(0, dt - (self.clock() - tick)))
-            state = arm.read()
-            self.healthy(state)
+            settling_s = 0.0
             if check_cartesian:
-                check_cartesian(state, target)
+                # A command write is not a sensor update. Keep the endpoint held
+                # while waiting for fresh feedback, with stop/health/joint guards.
+                sent = self.clock()
+                deadline = sent + CARTESIAN_SETTLE_TIMEOUT_S
+                while True:
+                    self.sleep(max(0, min(0.02, deadline - self.clock())))
+                    settling_s = self.clock() - sent
+                    if self.stops[side].is_set():
+                        raise InterruptedError("Stop requested during endpoint settling")
+                    state = arm.read()
+                    self.healthy(state)
+                    if np.max(abs(np.asarray(state["joints_rad"]) - target)) > TRACKING_ERROR_RAD:
+                        raise RobotError("tracking_error", "Joint tracking error exceeds 3 degrees")
+                    if state["feedback_age_s"] >= settling_s:
+                        if self.clock() >= deadline:
+                            raise RobotError(
+                                "feedback_unavailable", "No feedback newer than final command"
+                            )
+                        continue
+                    try:
+                        check_cartesian(state, target)
+                        break
+                    except RobotError:
+                        if self.clock() >= deadline:
+                            raise
+            else:
+                state = arm.read()
+                self.healthy(state)
             result = {
                 "status": "completed",
                 "target_rad": target.tolist(),
@@ -705,6 +732,7 @@ class Bridge:
                     "type": "cartesian",
                     "samples": len(commands),
                     "duration_s": action.duration_s,
+                    "settling_s": settling_s,
                     "position_tolerance_m": IK_POSITION_TOLERANCE,
                     "rotation_tolerance_rad": float(IK_ROTATION_TOLERANCE),
                 }
