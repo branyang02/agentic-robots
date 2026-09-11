@@ -15,10 +15,13 @@ For robot operation, initialize the conversation with `robot-init` as described 
 duplicating them across repository files. A task message in the initialized conversation starts
 the observe / reason / execute / evaluate loop and its recording.
 
-Never kill/restart a controller holding enabled arms or drop torque to install a
-code update. Reuse healthy sessions. Physical startup support and release must be
-authorized by the current user; existing authorization carries across turns.
-This file does not establish physical readiness. Do not reset motor protection.
+Never kill/restart a controller holding enabled arms. Reuse healthy sessions;
+release through the session API before a controller changeover. The user grants
+standing release authorization for this setup's verified near-zero resting pose,
+under the checks in `src/agentic_robots/robot_agent.md`; no repeated approval is needed.
+Outside that pose, physical support and user authorization are required. Startup
+support must still be established; release authorization does not establish startup
+readiness. Existing authorization carries across turns. Do not reset motor protection.
 
 Tests must use simulated hardware or mocks, with HTTP test processes unable to open
 CAN sockets. The opt-in Codex E2E test also uses simulated arms and synthetic video.

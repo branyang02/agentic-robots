@@ -62,10 +62,15 @@ manually prepared task prompt file is needed between tasks.
 Between tasks, observations return live joint feedback without camera images;
 completed recordings are left unchanged.
 
-After a task, the agent verifies both arms have returned to neutral and retains
-powered hold for the next task. For shutdown, request release after that verification,
-then stop the processes. An interrupted task does not establish neutral; do not
-close the controller's terminal while an arm still needs powered support.
+After a task, finish and review the recording before releasing motor sessions.
+For this setup, the user grants standing authorization to release both arms in the
+verified near-zero resting pose without asking again. Follow the canonical
+[release checks](../src/agentic_robots/robot_agent.md), including fresh stationary
+feedback and scene inspection immediately before release. Exact zero is unnecessary;
+the existing neutral tolerances apply. Retaining powered hold for the next task is
+also allowed. Release each session before stopping the controller; release disables
+torque, not the external power supply. An interrupted task or stale neutral result
+does not establish readiness to release.
 
 Override the motor endpoint with `--upstream` when needed. During a recording, all
 observations and actions go through the recorder; it owns the three camera streams.
@@ -145,6 +150,19 @@ The agent automatically starts recording with the task text, then repeats:
 Returning both arms to neutral (six zero joint targets per arm) is part of every
 task, including the example above which does not request a return. The agent verifies
 fresh measured joints and images after motion ends, then finishes and reviews the video.
+
+Every recorder action response contains `post_action` images and measured feedback,
+each connected arm's base-frame `ee_pose` at `grasp_site`, `gripper` state, and concise
+`diagnostics`. This is automatic for completed, rejected, and stopped commands.
+The recorder waits up to two seconds for newly published camera frames after the
+motor response. Unavailable images or valid measured poses are reported explicitly
+in `post_action.errors`; the original action outcome is preserved. Native MCP returns
+the images inline, while `robot-call` exposes their absolute paths. Separate `observe`
+and `session(status)` requests remain available whenever further inspection helps.
+Measured FK is model-based, not calibrated object/world localization. An interrupted
+jaw action does not become a completed closure through recovery; inspect the requested
+and measured opening before assuming the grasp is secure.
+
 The recorder verifies both arms before normal finalization; it never executes a hidden
 return routine. The agent chooses whether a last-resort neutral reset could help
 unfinished work. It records a review with success, a correction for a retry, or evidence

@@ -58,6 +58,23 @@ Read result JSON even when the command exits nonzero: rejections are feedback.
 Display the returned absolute image paths with the available image-viewing tool.
 Do not open cameras through the underlying motor bridge; recording owns them.
 
+Every recorder `execute` response includes `post_action` observations and concise
+`diagnostics`, whether the command completed, was rejected, or stopped. Inspect the
+returned images and both arms' measured feedback before choosing the next action.
+Each arm's `ee_pose` is FK of measured joints at the model's `grasp_site`, expressed
+in that arm's base frame (metres and XYZW quaternion), not a measured world/object
+pose or the commanded endpoint. `gripper` includes measured opening and, for the
+requested jaw action, its requested opening, error, completion status, and whether
+it was interrupted. An interrupted jaw action may hold a partial opening; recovery
+does not finish closure or establish a secure grasp. Reassess before carrying.
+Post-action camera frames are published after the action response from the motor
+controller; publication times are not synchronized sensor exposure times. Missing
+or stale images/feedback appear in `post_action.errors`; never treat missing evidence
+as success or replay an action merely because its post-action observation failed.
+You may always request additional `observe` or `session(status)` calls when more
+views, newer feedback, or clarification is useful. The bundled response reduces
+round trips; it does not restrict further inspection or guarantee a settled pose.
+
 An execute request is `{"action":{...}}`. Action fields:
 - `arm`: `left` or `right`; `kind`: one of the five kinds below.
 - `joint_target` / `joint_delta`: six values in `joints_rad`.
@@ -111,9 +128,26 @@ a disconnected arm, use `{"operation":"start","arm":"left","supported":true}`
 (or right) only when startup support was authorized in the initialization or by the
 current user. Do not invent physical readiness. Communication-timeout reset needs
 explicit authorization; never automatically reset a protection fault.
-`session` stop interrupts motion while retaining powered hold. Only an explicit,
-user-authorized `release` removes torque. Never kill/restart a controller holding
-enabled arms, including for code updates. Recorder errors do not justify releasing
-motors. Keep the controller holding at task completion.
-For this setup, the user identifies verified neutral as the only resting pose
-where power can be cut. Leave power removal to an explicit user request.
+`session` stop interrupts motion while retaining powered hold. For this physical
+setup, the user grants standing authorization to release all arm/gripper torque
+when both arms are verified near zero in their safe resting pose. Exact zero is
+not required: use the existing neutral criteria, with every joint within 3 degrees
+(0.05236 rad) of zero and absolute joint velocities at most 0.05 rad/s on two fresh,
+healthy readings at least 150 ms apart, with no latched faults. Inspect current
+camera images to confirm the resting pose and that release will not drop a held
+object. A zero target, old finish result, or stale/unhealthy feedback is insufficient.
+
+After completing any active recording's finish and review, recheck these conditions
+before release. When they hold, you may release both arms without asking again,
+including for shutdown, calibration, maintenance, or ending powered hold between
+tasks. Call `session` with `{"operation":"release","arm":"left","supported":true}`
+and then the equivalent for right; here `supported` refers to the verified safe
+resting pose. Check each result and report which sessions were released; do not
+claim all torque is off after a partial failure. Release is permitted, not mandatory
+at every task completion; retain hold when useful for the next task.
+
+Never kill/restart a controller while it still owns enabled arms. Release through
+the session API before stopping it. Outside the verified resting pose, physical
+support and user authorization are still required. This standing authorization does
+not authorize motor-protection resets or establish startup readiness. `release`
+disables motor torque; it does not switch off the external electrical power supply.
