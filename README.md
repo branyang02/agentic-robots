@@ -201,8 +201,9 @@ Units are metres/radians. EE targets require base-frame `position_m` and
 with `frame: base` or `tool`. World commands fail with an explanation until a
 world-to-base calibration exists. Deltas use measured state when execution begins.
 
-The agent selects duration (positive seconds, default 5). The executor interpolates
-joint angles linearly over that duration, with no action-size, speed, acceleration,
+The agent selects execution duration (positive seconds, default 5), excluding planning.
+By default the executor interpolates joint angles linearly; `path: "cartesian"` on
+EE actions follows a checked Cartesian trajectory. There is no action-size, speed, acceleration,
 or temperature cap and no automatic time stretching. There is no observation ID,
 observation age requirement, action count limit, or mandatory endpoint settling delay.
 Timing can overrun due to operating-system/driver delays. Each arm accepts one action
@@ -379,3 +380,27 @@ they verify video decoding, camera layout, immutable observations, event logging
 transport/capture/log-write failures, and preservation of hold after recorder shutdown.
 HTTP test servers explicitly forbid CAN sockets. These validate software behavior,
 not physical dynamics or task success on the real robot.
+
+### Straight Cartesian approaches and retreats
+
+Add `"path": "cartesian"` to `ee_target` or `ee_delta` to request a straight
+translation with shortest-path orientation interpolation. A translation-only delta
+maintains orientation; `frame: "tool"` resolves the delta in the starting tool frame.
+For example, the agent can choose a 1 cm upward move in the arm's base frame:
+
+```json
+{"action":{"arm":"left","kind":"ee_delta","path":"cartesian","position_m":[0,0,0.01],"duration_s":3}}
+```
+
+The bridge checks the full sampled path before moving and returns
+`cartesian_path_infeasible` with the failing sample, fraction, and cause when it
+cannot follow it. During execution, measured-joint FK error over 1 mm / 0.5° relative
+to the preceding command (and the final command at completion) stops and latches a
+recoverable `tracking_error` with `details.space: "cartesian"`. This detects Cartesian
+lag even when individual joint errors remain below 3°. It never substitutes a
+joint-space path. Existing commands default
+to `path: "joint"`; joint and gripper actions reject `path: "cartesian"`.
+The [canonical agent instructions](src/agentic_robots/robot_agent.md) describe sampling,
+tolerances, and limitations. These checks cover the model, not table/other-arm
+clearance or measured physical path accuracy. Codex still chooses the maneuver and
+timing; no second planner or hidden approach/retreat routine is added.

@@ -11,7 +11,7 @@ from typing import Literal
 import numpy as np
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 
 from agentic_robots.cameras import capture, configured_cameras
 
@@ -97,6 +97,7 @@ class Action(BaseModel):
     gripper_opening: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     frame: Literal["base", "tool", "world"] = "base"
     duration_s: float = Field(default=5, gt=0, allow_inf_nan=False)
+    path: Literal["joint", "cartesian"] = "joint"
 
 
 class Motion:
@@ -119,7 +120,38 @@ class Motion:
     def fk(self, joints, opening=0):
         return self.kin.fk(self.model_q(joints, opening)).copy()
 
+    def tracking_check(self):
+        # Per-action MuJoCo data avoids sharing mutable IK state with another arm.
+        data = self.mj.MjData(self.model)
+        site = self.model.site("grasp_site").id
+
+        def pose(joints, opening):
+            data.qpos[:] = self.model_q(joints, opening)
+            self.mj.mj_forward(self.model, data)
+            return data.site_xpos[site].copy(), data.site_xmat[site].reshape(3, 3).copy()
+
+        def check(state, commanded):
+            actual_p, actual_r = pose(state["joints_rad"], state["gripper_opening"])
+            expected_p, expected_r = pose(commanded, state["gripper_opening"])
+            position_error = float(np.linalg.norm(actual_p - expected_p))
+            rotation_error = float(Rotation.from_matrix(expected_r.T @ actual_r).magnitude())
+            if position_error > IK_POSITION_TOLERANCE or rotation_error > IK_ROTATION_TOLERANCE:
+                raise RobotError(
+                    "tracking_error",
+                    "Measured Cartesian tracking exceeds 1 mm / 0.5 degrees",
+                    space="cartesian",
+                    previous_command_rad=commanded.tolist(),
+                    position_error_m=position_error,
+                    rotation_error_rad=rotation_error,
+                    position_tolerance_m=IK_POSITION_TOLERANCE,
+                    rotation_tolerance_rad=float(IK_ROTATION_TOLERANCE),
+                )
+
+        return check
+
     def target(self, action, joints, opening=0):
+        if action.path == "cartesian" and action.kind not in ("ee_target", "ee_delta"):
+            raise ValueError("Cartesian paths require ee_target or ee_delta")
         if action.kind == "gripper_target":
             if (
                 action.gripper_opening is None
@@ -150,6 +182,16 @@ class Motion:
             return q + joints if action.kind == "joint_delta" else q
         if action.joints_rad is not None:
             raise ValueError("Cartesian actions cannot contain joint commands")
+        target = self.ee_pose(action, joints, opening)
+        return self.solve_ik(target, joints, opening)
+
+    def ee_pose(self, action, joints, opening=0):
+        if (
+            action.frame == "world"
+            or action.joints_rad is not None
+            or action.gripper_opening is not None
+        ):
+            raise ValueError("EE paths require base/tool poses without joint or gripper commands")
         current = self.fk(joints, opening)
         target = current.copy()
         if action.kind == "ee_target":
@@ -180,6 +222,9 @@ class Motion:
             else:
                 target[:3, 3] += translation
                 target[:3, :3] = rotation @ current[:3, :3]
+        return target
+
+    def solve_ik(self, target, joints, opening=0):
         ok, solution = self.kin.ik(
             target,
             "grasp_site",
@@ -208,7 +253,7 @@ class Motion:
             )
         return q
 
-    def plan(self, action, joints, opening=0):
+    def starting_joints(self, joints, opening):
         if not np.isfinite(opening):
             raise ValueError("Gripper feedback must be finite")
         measured = vector(joints, 6)
@@ -221,7 +266,9 @@ class Motion:
                 measured_joints_rad=measured.tolist(),
                 joint_limits_rad=self.limits.tolist(),
             )
-        target = vector(self.target(action, start, opening), 6)
+        return start
+
+    def check_limits(self, target):
         if np.any(target < self.limits[:, 0] - 1e-8) or np.any(target > self.limits[:, 1] + 1e-8):
             raise RobotError(
                 "joint_limits",
@@ -235,9 +282,11 @@ class Motion:
                     + 1
                 ).tolist(),
             )
+
+    def check_segment(self, start, target, opening, target_opening):
+        self.check_limits(target)
         # Spatial sampling is independent of action duration. It never changes timing.
         samples = max(2, int(np.ceil(np.max(abs(target - start)) / np.deg2rad(0.5))) + 1)
-        target_opening = action.gripper_opening if action.kind == "gripper_target" else opening
         samples = max(samples, int(np.ceil(abs(target_opening - opening) * 50)) + 1)
         for q, jaw in zip(
             np.linspace(start, target, samples), np.linspace(opening, target_opening, samples)
@@ -258,7 +307,78 @@ class Motion:
                         penetration_m=float(-contact.dist),
                         bodies=[self.model.body(a).name, self.model.body(b).name],
                     )
+
+    def plan(self, action, joints, opening=0):
+        if action.path == "cartesian":
+            raise ValueError("Use trajectory to plan the complete Cartesian path")
+        start = self.starting_joints(joints, opening)
+        target = vector(self.target(action, start, opening), 6)
+        target_opening = action.gripper_opening if action.kind == "gripper_target" else opening
+        self.check_segment(start, target, opening, target_opening)
         return start, target
+
+    def trajectory(self, action, joints, opening=0):
+        steps = max(1, int(np.ceil(action.duration_s / 0.02)))
+        if action.path == "joint":
+            start, target = self.plan(action, joints, opening)
+            return np.linspace(start, target, steps + 1)
+        if action.kind not in ("ee_target", "ee_delta"):
+            raise ValueError("Cartesian paths require ee_target or ee_delta")
+        start = self.starting_joints(joints, opening)
+        first = self.fk(start, opening)
+        last = self.ee_pose(action, start, opening)
+        rotation = Slerp([0, 1], Rotation.from_matrix([first[:3, :3], last[:3, :3]]))
+        distance = np.linalg.norm(last[:3, 3] - first[:3, 3])
+        angle = Rotation.from_matrix(first[:3, :3].T @ last[:3, :3]).magnitude()
+        # Sample by time AND geometry, so short durations cannot skip path checks.
+        steps = max(steps, int(np.ceil(distance / 0.002)), int(np.ceil(angle / np.deg2rad(0.5))))
+
+        def pose(fraction):
+            result = np.eye(4)
+            result[:3, 3] = first[:3, 3] + fraction * (last[:3, 3] - first[:3, 3])
+            result[:3, :3] = rotation(fraction).as_matrix()
+            return result
+
+        path = [start]
+        for i in range(1, steps + 1):
+            try:
+                q = self.solve_ik(pose(i / steps), path[-1], opening)
+                # Reject IK branch jumps, not long overall motions or durations.
+                if np.max(abs(q - path[-1])) > np.deg2rad(5):
+                    raise RobotError("cartesian_discontinuity", "IK branch is not continuous")
+                self.check_segment(path[-1], q, opening, opening)
+                # Also check the joint interpolation between consecutive commands.
+                count = max(2, int(np.ceil(np.max(abs(q - path[-1])) / np.deg2rad(0.5))))
+                for t in np.linspace(0, 1, count + 1):
+                    reached = self.fk(path[-1] + t * (q - path[-1]), opening)
+                    expected = pose((i - 1 + t) / steps)
+                    position_error = float(np.linalg.norm(reached[:3, 3] - expected[:3, 3]))
+                    rotation_error = float(
+                        Rotation.from_matrix(expected[:3, :3].T @ reached[:3, :3]).magnitude()
+                    )
+                    if (
+                        position_error > IK_POSITION_TOLERANCE
+                        or rotation_error > IK_ROTATION_TOLERANCE
+                    ):
+                        raise RobotError(
+                            "cartesian_path_error",
+                            "Joint segment deviates from Cartesian path",
+                            position_error_m=position_error,
+                            rotation_error_rad=rotation_error,
+                        )
+            except ValueError as exc:
+                raise RobotError(
+                    "cartesian_path_infeasible",
+                    "Cartesian path rejected before motion",
+                    sample=i,
+                    samples=steps,
+                    fraction=i / steps,
+                    cause=getattr(exc, "code", "invalid_command"),
+                    cause_message=str(exc),
+                    cause_details=getattr(exc, "details", {}),
+                ) from exc
+            path.append(q)
+        return np.asarray(path)
 
 
 def camera_snapshot():
@@ -535,12 +655,14 @@ class Bridge:
                 state = arm.read()
                 self.healthy(state)
                 try:
-                    start, target = self.motion.plan(
+                    commands = self.motion.trajectory(
                         action, state["joints_rad"], state["gripper_opening"]
                     )
                 except ValueError as exc:
                     return failure(exc, request, state)
-            steps = max(1, int(np.ceil(action.duration_s / 0.02)))
+            check_cartesian = self.motion.tracking_check() if action.path == "cartesian" else None
+            start, target = commands[0], commands[-1]
+            steps = len(commands) - 1
             dt = action.duration_s / steps
             previous = start
             opening = float(np.clip(state["gripper_opening"], 0, 1))
@@ -558,7 +680,9 @@ class Bridge:
                         error_rad=(np.asarray(state["joints_rad"]) - previous).tolist(),
                         maximum_error_rad=float(TRACKING_ERROR_RAD),
                     )
-                command = start + (target - start) * (i / steps)
+                if check_cartesian:
+                    check_cartesian(state, previous)
+                command = commands[i]
                 if gripper:
                     arm.command_gripper(opening + (action.gripper_opening - opening) * (i / steps))
                 else:
@@ -568,12 +692,22 @@ class Bridge:
                     self.sleep(max(0, dt - (self.clock() - tick)))
             state = arm.read()
             self.healthy(state)
+            if check_cartesian:
+                check_cartesian(state, target)
             result = {
                 "status": "completed",
                 "target_rad": target.tolist(),
                 "actual": state,
                 "joint_error_rad": (np.asarray(state["joints_rad"]) - target).tolist(),
             }
+            if action.path == "cartesian":
+                result["path"] = {
+                    "type": "cartesian",
+                    "samples": len(commands),
+                    "duration_s": action.duration_s,
+                    "position_tolerance_m": IK_POSITION_TOLERANCE,
+                    "rotation_tolerance_rad": float(IK_ROTATION_TOLERANCE),
+                }
             if gripper:
                 result["target_gripper_opening"] = action.gripper_opening
                 result["gripper_error"] = state["gripper_opening"] - action.gripper_opening
