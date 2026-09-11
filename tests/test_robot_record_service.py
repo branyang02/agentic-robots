@@ -112,6 +112,21 @@ def test_two_tasks_reuse_http_service_and_preserve_hold(http_recorder):
                     },
                 )
                 assert result["status"] == "completed"
+                post = result["post_action"]
+                assert set(post["images"]) == {"left", "top", "right"}
+                assert set(post["errors"]) <= {
+                    f"arm:{side}" for side in ("left", "right") if side not in post["arms"]
+                }
+                assert all(
+                    img["published_unix"] >= post["action_response_unix"]
+                    for img in post["images"].values()
+                )
+                measured = post["arms"][arm]
+                assert measured["joints_rad"] == target
+                assert measured["ee_pose"]["frame"] == f"{arm}_base"
+                assert len(measured["ee_pose"]["position_m"]) == 3
+                assert measured["gripper"]["measured_opening"] == measured["gripper_opening"]
+                assert result["diagnostics"]
         assert len(call("observe")["images"]) == 3
         assert call("recording", {"operation": "finish"})["status"] == "finished"
         reviewed = call(
@@ -190,6 +205,9 @@ def test_recorded_tracking_stop_recover_correct_and_return(http_recorder):
     stopped = call("execute", {"action": action}, error=True)
     assert stopped["error"]["code"] == "tracking_error"
     assert stopped["error"]["recoverable"] and not stopped["error"]["retryable"]
+    assert len(stopped["post_action"]["images"]) == 3
+    assert stopped["post_action"]["arms"]["left"]["ee_pose"] is not None
+    assert stopped["diagnostics"]
     observed = call("observe")
     assert len(observed["images"]) == 3
     held = observed["arms"]["left"]["joints_rad"]

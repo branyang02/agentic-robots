@@ -22,7 +22,11 @@ def state():
 @pytest.fixture
 def attempt(tmp_path, monkeypatch):
     feedback = state()
-    upstream = Mock(side_effect=lambda *_: copy.deepcopy(feedback))
+    upstream = Mock(
+        side_effect=lambda _, tool, __: (
+            {"status": "completed"} if tool == "execute" else copy.deepcopy(feedback)
+        )
+    )
     monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     monkeypatch.setattr(Rollout, "start", ready_fake)
 
@@ -96,7 +100,8 @@ def test_return_declaration_never_moves_and_video_failure_does_not_trap_return(
     bridge.session("recover", arm="left")
     assert upstream.call_args.args[2]["operation"] == "recover"
     bridge.execute(Action(arm="left", kind="joint_target", joints_rad=[0] * 6))
-    assert upstream.call_args.args[1] == "execute"
+    assert sum(c.args[1] == "execute" for c in upstream.call_args_list) == 1
+    assert upstream.call_args.args[1:] == ("session", {"operation": "status"})
 
 
 def test_recoverable_latch_cannot_be_declared_unavailable_control(attempt):

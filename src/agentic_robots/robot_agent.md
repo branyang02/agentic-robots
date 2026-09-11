@@ -58,6 +58,23 @@ Read result JSON even when the command exits nonzero: rejections are feedback.
 Display the returned absolute image paths with the available image-viewing tool.
 Do not open cameras through the underlying motor bridge; recording owns them.
 
+Every recorder `execute` response includes `post_action` observations and concise
+`diagnostics`, whether the command completed, was rejected, or stopped. Inspect the
+returned images and both arms' measured feedback before choosing the next action.
+Each arm's `ee_pose` is FK of measured joints at the model's `grasp_site`, expressed
+in that arm's base frame (metres and XYZW quaternion), not a measured world/object
+pose or the commanded endpoint. `gripper` includes measured opening and, for the
+requested jaw action, its requested opening, error, completion status, and whether
+it was interrupted. An interrupted jaw action may hold a partial opening; recovery
+does not finish closure or establish a secure grasp. Reassess before carrying.
+Post-action camera frames are published after the action response from the motor
+controller; publication times are not synchronized sensor exposure times. Missing
+or stale images/feedback appear in `post_action.errors`; never treat missing evidence
+as success or replay an action merely because its post-action observation failed.
+You may always request additional `observe` or `session(status)` calls when more
+views, newer feedback, or clarification is useful. The bundled response reduces
+round trips; it does not restrict further inspection or guarantee a settled pose.
+
 An execute request is `{"action":{...}}`. Action fields:
 - `arm`: `left` or `right`; `kind`: one of the five kinds below.
 - `joint_target` / `joint_delta`: six values in `joints_rad`.

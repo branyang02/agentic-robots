@@ -84,11 +84,13 @@ def test_actions_forward_unchanged_and_preserve_rejection(rollout, monkeypatch):
     upstream = Mock(return_value=rejection)
     monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     action = Action(arm="left", kind="joint_target", joints_rad=[4, 0, 0, 0, 0, 0])
-    assert RecordingBridge(rollout).execute(action) == rejection
-    upstream.assert_called_once_with(
+    result = RecordingBridge(rollout).execute(action)
+    assert all(result[k] == v for k, v in rejection.items())
+    assert "post_action" in result and result["diagnostics"]
+    upstream.assert_any_call(
         "unused-test-upstream", "execute", {"action": action.model_dump(exclude_none=True)}
     )
-    request, response = events(rollout)[-2:]
+    request, response = [e for e in events(rollout) if e.get("tool") == "execute"]
     assert request["request_id"] == response["request_id"]
     assert response["result"] == rejection
     assert rollout.in_flight == 0
@@ -103,7 +105,8 @@ def test_transport_failure_is_recorded_without_automatic_retry(rollout, monkeypa
     )
     assert not result["error"]["retryable"]
     assert "unknown" in result["error"]["details"]["action_outcome"]
-    upstream.assert_called_once()
+    assert sum(c.args[1] == "execute" for c in upstream.call_args_list) == 1
+    assert upstream.call_args.args[1:] == ("session", {"operation": "status"})
     assert rollout.in_flight == 0
 
 
@@ -115,7 +118,7 @@ def test_dead_capture_does_not_forward_actions_but_stop_still_works(rollout, mon
     bridge = RecordingBridge(rollout)
     result = bridge.execute(Action(arm="left", kind="joint_target", joints_rad=[0] * 6))
     assert result["error"]["code"] == "recording_unavailable"
-    upstream.assert_not_called()
+    assert all(c.args[1:] == ("session", {"operation": "status"}) for c in upstream.call_args_list)
     bridge.session("stop")
     assert upstream.call_args.args[2]["operation"] == "stop"
 
@@ -140,7 +143,7 @@ def test_idle_recorder_uses_no_cameras_and_reports_how_to_start(tmp_path, monkey
     assert bridge.recording("note", "note")["error"]["code"] == "recording_not_started"
     result = bridge.execute(Action(arm="left", kind="joint_target", joints_rad=[0] * 6))
     assert result["error"]["code"] == "recording_not_started"
-    upstream.assert_not_called()
+    assert all(c.args[1:] == ("session", {"operation": "status"}) for c in upstream.call_args_list)
     assert bridge.observe()["images"] == {}
     bridge.session("stop")
     assert upstream.call_args.args[2]["operation"] == "stop"
@@ -170,7 +173,7 @@ def test_completed_recordings_stay_unchanged_during_idle_calls(rollout, monkeypa
     upstream.reset_mock()
     rejected = bridge.execute(Action(arm="left", kind="joint_target", joints_rad=[0] * 6))
     assert rejected["error"]["code"] == "recording_unavailable"
-    upstream.assert_not_called()
+    assert all(c.args[1:] == ("session", {"operation": "status"}) for c in upstream.call_args_list)
     after = {p: p.read_bytes() for p in rollout.output.rglob("*") if p.is_file()}
     assert after == before, "Idle calls must not modify a completed task's files"
 
@@ -214,12 +217,12 @@ def test_event_write_failure_does_not_send_an_unlogged_action(rollout, monkeypat
     ready_fake(rollout)
     (rollout.output / "events.jsonl").unlink()
     (rollout.output / "events.jsonl").mkdir()
-    upstream = Mock()
+    upstream = Mock(return_value={"arms": {}, "errors": {}, "faults": {}})
     monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     result = RecordingBridge(rollout).execute(
         Action(arm="left", kind="joint_target", joints_rad=[0] * 6)
     )
-    upstream.assert_not_called()
+    assert all(c.args[1:] == ("session", {"operation": "status"}) for c in upstream.call_args_list)
     assert result["status"] == "rejected"
     assert "recording_error" in result
     assert not rollout.status()["ready"]
@@ -343,6 +346,8 @@ def test_mcp_recorded_rollout_against_http_robot_preserves_hold(http_robot, tmp_
                         {"action": {"arm": side, "kind": kind, "duration_s": 0.1, **extra}},
                     )
                     assert not result.is_error, result.structured_content
+                    assert len([x for x in result.content if x.type == "image"]) == 3
+                    assert result.structured_content["post_action"]["arms"][side]["ee_pose"]
             bad = await client.call_tool(
                 "execute",
                 {
@@ -354,6 +359,7 @@ def test_mcp_recorded_rollout_against_http_robot_preserves_hold(http_robot, tmp_
                 },
             )
             assert bad.structured_content["error"]["code"] == "joint_limits"
+            assert len([x for x in bad.content if x.type == "image"]) == 3
             observation = await client.call_tool("observe", {})
             assert len([x for x in observation.content if x.type == "image"]) == 3
             assert set(observation.structured_content["images"]) == set(ORDER)

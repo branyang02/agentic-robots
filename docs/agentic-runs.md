@@ -145,6 +145,19 @@ The agent automatically starts recording with the task text, then repeats:
 Returning both arms to neutral (six zero joint targets per arm) is part of every
 task, including the example above which does not request a return. The agent verifies
 fresh measured joints and images after motion ends, then finishes and reviews the video.
+
+Every recorder action response contains `post_action` images and measured feedback,
+each connected arm's base-frame `ee_pose` at `grasp_site`, `gripper` state, and concise
+`diagnostics`. This is automatic for completed, rejected, and stopped commands.
+The recorder waits up to two seconds for newly published camera frames after the
+motor response. Unavailable images or valid measured poses are reported explicitly
+in `post_action.errors`; the original action outcome is preserved. Native MCP returns
+the images inline, while `robot-call` exposes their absolute paths. Separate `observe`
+and `session(status)` requests remain available whenever further inspection helps.
+Measured FK is model-based, not calibrated object/world localization. An interrupted
+jaw action does not become a completed closure through recovery; inspect the requested
+and measured opening before assuming the grasp is secure.
+
 The recorder verifies both arms before normal finalization; it never executes a hidden
 return routine. The agent chooses whether a last-resort neutral reset could help
 unfinished work. It records a review with success, a correction for a retry, or evidence

@@ -13,8 +13,24 @@ from agentic_robots.bridge import Action, json_ready
 
 def structured(value):
     value = json_ready(value)
+    images = []
+    observation = value.get("post_action")
+    if observation is not None:
+        for name, record in list(observation["images"].items()):
+            try:
+                data = base64.b64encode(Path(record["path"]).read_bytes()).decode()
+                images.extend(
+                    [
+                        TextContent(type="text", text=f"{name} post-action camera"),
+                        ImageContent(type="image", mimeType="image/png", data=data),
+                    ]
+                )
+            except OSError as exc:
+                del observation["images"][name]
+                observation.setdefault("errors", {})[f"camera:{name}"] = str(exc)
+                value["diagnostics"].append(f"Post-action image unavailable: {name}: {exc}")
     return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(value))],
+        content=[TextContent(type="text", text=json.dumps(value)), *images],
         structuredContent=value,
         isError=value.get("status") in ("rejected", "stopped"),
     )
@@ -63,6 +79,10 @@ def register_robot_tools(server, bridge):
         Only errors marked recoverable permit session recover after inspection.
         Errors include a code, details, last feedback, retryable, recoverable, and next_step.
         The service stays up after errors.
+        Recorder execute always returns post_action images, measured base-frame EE poses,
+        gripper state, and concise diagnostics, including on rejected/stopped requests.
+        Missing evidence is reported separately; it does not change the motion outcome.
+        Separate observe/session status calls remain available for additional information.
         Different arms may execute concurrently. No automatic return or torque release.
         A client disconnect may let an action finish; session stop explicitly interrupts it.
         """

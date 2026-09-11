@@ -15,6 +15,7 @@ from PIL import Image
 
 from agentic_robots.bridge import RobotError, failure, json_ready, write_result
 from agentic_robots.cameras import auto_exposure, configured_cameras, input_args
+from agentic_robots.feedback import ActionFeedback
 from agentic_robots.task import TERMINAL, Review, control_unavailable, neutral_feedback
 
 ORDER = ("left", "top", "right")
@@ -241,11 +242,25 @@ class Rollout:
             and all(age is not None and 0 <= age < 2 for age in ages.values()),
         }
 
-    def snapshots(self):
+    def snapshots(self, after=None):
         with self.activity:  # Finish must wait for any snapshot files being published.
             if self.state != "recording":
                 return {}, {"recording": "Start recording for images"}
             images, errors = {}, {}
+            # Publication timestamps are software timestamps, not sensor exposure times.
+            # For action responses, never silently substitute a pre-action preview.
+            deadline = time.monotonic() + 2
+            if after is not None:
+                while time.monotonic() < deadline:
+                    if all(
+                        (self.output / f"{role}.png").exists()
+                        and (self.output / f"{role}.png").stat().st_mtime >= after
+                        for role in ORDER
+                    ):
+                        break
+                    if self.process is None or self.process.poll() is not None:
+                        break
+                    time.sleep(0.02)
             directory = self.output / "observations" / uuid.uuid4().hex
             directory.mkdir(parents=True)
             for role in ORDER:
@@ -253,6 +268,10 @@ class Rollout:
                     # Open pins the inode while FFmpeg atomically publishes the next frame.
                     with (self.output / f"{role}.png").open("rb") as source:
                         published = os.fstat(source.fileno()).st_mtime
+                        if after is not None and (
+                            published < after or not 0 <= time.time() - published < 2
+                        ):
+                            raise ValueError("No fresh frame published after action response")
                         path = directory / f"{role}.png"
                         path.write_bytes(source.read())
                     with Image.open(path) as frame:
@@ -362,6 +381,7 @@ class RecordingBridge:
         self.lifecycle = threading.Lock()
         self.binding = None
         self.watch_error = None
+        self.action_feedback = ActionFeedback()
 
     def status(self):
         result = self.rollout.status() if self.rollout else {"status": "idle", "ready": False}
@@ -557,6 +577,42 @@ class RecordingBridge:
 
     def execute(self, action):
         r = self.rollout
+        if r:
+            with r.activity:
+                r.in_flight += 1  # Finish also waits for this action's observation.
+        try:
+            result = self._execute(action)
+            completed = time.time()
+            try:
+                observation = self.observe(after=completed)
+            except Exception as exc:
+                observation = {"images": {}, "arms": {}, "errors": {"observation": str(exc)}}
+            observation["action_response_unix"] = completed
+            try:
+                result = self.action_feedback.enrich(observation, action, result)
+            except Exception as exc:
+                observation.setdefault("errors", {})["feedback"] = str(exc)
+                result = {
+                    **result,
+                    "post_action": observation,
+                    "diagnostics": [
+                        f"Execution {result.get('status', 'unknown')}; "
+                        f"post-action feedback failed: {exc}"
+                    ],
+                }
+            if r:
+                try:
+                    r.event("post_action", action=action.model_dump(), result=result)
+                except OSError as exc:
+                    result["diagnostics"].append(f"Post-action log unavailable: {exc}")
+            return result
+        finally:
+            if r:
+                with r.activity:
+                    r.in_flight -= 1
+
+    def _execute(self, action):
+        r = self.rollout
         if r is None:
             return failure(
                 RobotError(
@@ -591,14 +647,9 @@ class RecordingBridge:
                 except OSError as exc:
                     result["recording_error"] = str(exc)
                 return result
-            r.in_flight += 1
             r.manifest["task"]["motion_started"] = True
             r.manifest["task"].pop("watch_paused", None)
-        try:
-            return self.forward("execute", {"action": action.model_dump(exclude_none=True)})
-        finally:
-            with r.activity:
-                r.in_flight -= 1
+        return self.forward("execute", {"action": action.model_dump(exclude_none=True)})
 
     def session(self, operation, arm=None, supported=False, reset_communication=False):
         if operation == "stop" and self.rollout:
@@ -613,10 +664,15 @@ class RecordingBridge:
             ),
         )
 
-    def observe(self):
+    def observe(self, after=None):
         start = time.time()
         r = self.rollout
-        images, errors = r.snapshots() if r else ({}, {"recording": "Start recording for images"})
+        try:
+            images, errors = (
+                r.snapshots(after=after) if r else ({}, {"recording": "Start recording for images"})
+            )
+        except Exception as exc:
+            images, errors = {}, {"cameras": str(exc)}
         state = self.forward("session", {"operation": "status"})
         observation = {
             "capture_started_unix": start,
@@ -631,5 +687,8 @@ class RecordingBridge:
         if "error" in state:
             observation["errors"]["controller"] = state["error"]
         if r:
-            r.event("observation", observation=observation)
+            try:
+                r.event("observation", observation=observation)
+            except OSError as exc:
+                observation["errors"]["recording"] = str(exc)
         return observation
