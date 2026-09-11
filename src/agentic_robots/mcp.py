@@ -69,7 +69,13 @@ def register_robot_tools(server, bridge):
         Jaw actions preserve arm hold; arm actions preserve the last jaw command.
 
         Deltas use the measured state at execution. World calibration is unavailable.
-        duration_s is the requested positive duration of linear joint interpolation (default 5).
+        duration_s is the requested positive execution duration (default 5), excluding planning.
+        path='joint' (default) interpolates joints. EE actions also accept path='cartesian'
+        for straight translation and shortest rotation, resolved from measured start pose.
+        Full sampled IK/geometry/continuity checks precede execution; an infeasible path is
+        rejected without motion or fallback. Measured-FK tracking beyond 1 mm / 0.5 degrees
+        stops with recoverable tracking_error (details.space='cartesian'). These are sampled
+        model checks; physical clearance/tracking still require observation.
         No action size, speed/acceleration cap, time stretching, or observation prerequisite.
         Through the recorder, execution requires an active recording with all three
         camera streams fresh. Call recording(start, text=<user task>) first.

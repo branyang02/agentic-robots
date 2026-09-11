@@ -314,3 +314,62 @@ def test_premature_end_after_return_fault_resumes_through_review(http_recorder, 
     asyncio.run(robot_record.watch_once(adapter, object()))
     assert len(sent) == 1
     assert controller.poll() is None and recorder.poll() is None
+
+
+def test_cartesian_path_through_recorder_and_controller(http_recorder):
+    call, _, _, _, _, _ = http_recorder
+    for side in ("left", "right"):
+        call("session", dict(operation="start", arm=side, supported=True))
+    call("recording", dict(operation="start", text="Simulated Cartesian rise and neutral return"))
+    result = call(
+        "execute",
+        {
+            "action": dict(
+                arm="left",
+                kind="ee_delta",
+                path="cartesian",
+                position_m=[0, 0, 0.01],
+                duration_s=0.3,
+            )
+        },
+    )
+    assert result["status"] == "completed"
+    assert result["path"]["type"] == "cartesian"
+    assert set(result["post_action"]["images"]) == {"left", "right", "top"}
+    assert not result["post_action"]["errors"]
+    assert result["post_action"]["arms"]["left"]["ee_pose"]
+    rejected = call(
+        "execute",
+        {
+            "action": dict(
+                arm="left",
+                kind="ee_delta",
+                path="cartesian",
+                position_m=[10, 0, 0],
+                duration_s=0.02,
+            )
+        },
+        error=True,
+    )
+    assert rejected["error"]["code"] == "cartesian_path_infeasible"
+    assert set(rejected["post_action"]["images"]) == {"left", "right", "top"}
+    call("recording", dict(operation="return", text="Return after Cartesian test"))
+    call(
+        "execute",
+        {"action": dict(arm="left", kind="joint_target", joints_rad=[0] * 6, duration_s=0.3)},
+    )
+    assert call("recording", dict(operation="finish"))["task"]["neutral"]["verified"]
+    assert (
+        call(
+            "recording",
+            dict(
+                operation="review",
+                review=dict(
+                    outcome="success",
+                    summary="Simulated Cartesian path and rejection returned bundled evidence.",
+                    evidence=["HTTP action responses and neutral check"],
+                ),
+            ),
+        )["task"]["phase"]
+        == "success"
+    )

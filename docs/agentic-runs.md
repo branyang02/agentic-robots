@@ -175,8 +175,9 @@ contains a unique timestamp/ID directory for every attempt. Previous attempts re
 available for comparison. Task evaluation is done by this same Codex conversation.
 
 The agent chooses action sizes and timing. EE targets use each arm's base frame;
-there is no calibrated shared world frame. EE commands specify endpoints and
-interpolate in joint space. The collision model excludes the table and other arm.
+there is no calibrated shared world frame. EE commands default to joint-interpolated endpoints. Choose `path: "cartesian"`
+on EE actions for straight translation and shortest orientation interpolation; see
+the canonical prompt for feasibility checks and limitations. The collision model excludes the table and other arm.
 See the [action reference](../README.md#agent-observationaction-loop) for fields,
 checks, and feedback. `completed` only means execution finished; observations and
 actual feedback determine whether the task succeeded. Rejections provide correction
@@ -273,3 +274,13 @@ The first task injects one simulated tracking error and checks that the agent
 observes, recovers, and chooses a corrected action before completing the task.
 It is skipped in ordinary CI because CI has no signed-in desktop app. Software and
 synthetic video tests do not validate physical dynamics or visual robot accuracy.
+
+## Deploying Cartesian path support
+
+The `path` action field and Cartesian execution live in the motor controller as
+well as the recorder's tool schema. Update both processes for this feature. Finish
+and review active work, verify the safe resting pose, and release sessions before
+stopping the controller. Reuse the saved gripper calibration and established startup
+authorization when starting the updated controller. Source edits alone do not update
+a running process. Initialize an idle agent conversation again to load the updated
+canonical instructions.

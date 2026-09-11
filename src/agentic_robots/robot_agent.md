@@ -82,16 +82,46 @@ An execute request is `{"action":{...}}`. Action fields:
 - `ee_delta`: `position_m` and/or `rotation_vector_rad`; `frame` is `base` or `tool`.
 - `gripper_target`: `gripper_opening` (0 closed, 1 open).
 - `duration_s`: a positive number, default 5. Units are metres and radians.
+- `path`: `joint` (default) or `cartesian`; `cartesian` is available only for EE actions.
 
 Joint targets are absolute; deltas start from measured state. EE targets use each
 arm's base frame. There is no calibrated shared world frame. Use current observation
-and feedback to establish feasible goals. EE commands specify endpoints, not straight
-Cartesian paths. Arm actions preserve jaw targets; jaw actions preserve arm hold.
+and feedback to establish feasible goals. Default EE commands specify endpoints and interpolate joints. For a straight
+approach/retreat, explicitly choose `path: "cartesian"`: translation follows a line
+and orientation follows the shortest rotation (held fixed for translation-only
+`ee_delta`). Tool-frame deltas are resolved once in the starting tool frame, not a
+continuously rotating frame. You choose the direction, distance, orientation, and
+duration; the bridge does not invent approaches, detours, or retries.
+
+The entire sampled Cartesian path is checked before motion: successive seeded IK,
+joint limits, modeled self-collision, joint-branch continuity, and FK path deviation.
+A path can be infeasible even when its endpoint is reachable. Inspect
+`cartesian_path_infeasible` sample/fraction/cause diagnostics and revise the request;
+there is no fallback to joint interpolation. Sampling uses at most 20 ms, 2 mm
+translation, and 0.5 degree rotation between requested poses. Neighboring IK solutions
+must differ by at most 5 degrees per joint; interpolated joint segments are checked
+against 1 mm/0.5 degree model-space path tolerances. These are sampled geometric
+checks, not a guarantee of physical Cartesian tracking or obstacle clearance.
+Planning time is additional to `duration_s`; execution uses that duration without
+time stretching. Cartesian actions also compare measured-joint FK to the preceding command during
+execution and to the final command before completion. At the endpoint it waits for
+feedback newer than the final command and allows up to 150 ms of settling, with
+health, stop, and 3-degree joint checks still active. The endpoint must satisfy the
+same Cartesian tolerance; a persistent error still stops the action. `path.settling_s`
+reports this additional time separately from the requested motion duration. Error above 1 mm or 0.5 degree
+stops with a recoverable `tracking_error` and `details.space: "cartesian"`; inspect,
+recover hold, and revise the action rather than blindly retrying. This stricter
+check may stop motions that stay inside the existing 3-degree joint threshold.
+These remain sampled, model-based checks, not external pose measurement or continuous
+tracking guarantees. Joint tracking/stop/recovery and post-action feedback still apply. The table and other arm remain absent from the collision model. Inspect
+measured feedback and images after every action, including successful paths.
+Arm actions preserve jaw targets; jaw actions preserve arm hold.
 Grippers start passive until their first explicit jaw action.
 
 The agent chooses targets, durations, observation timing, and task completion. There
 is no fixed action budget or per-action approval, and no size, speed, acceleration,
-or temperature cap. Motion uses linear joint interpolation without time stretching.
+or temperature cap. Default motion uses linear joint interpolation; Cartesian paths follow checked
+intermediate joint commands without time stretching.
 The collision model omits the table and the other arm: assess clearance from the
 scene and separate arms near shared goals. `completed` only means the command
 sequence finished; compare actual joints, errors, and images with the goal.
