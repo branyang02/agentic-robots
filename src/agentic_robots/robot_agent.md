@@ -5,8 +5,8 @@ Keep this setup for subsequent tasks in this conversation.
 For each robot task:
 1. Call `recording` with `{"operation":"start","text":"<the user's full task>"}`.
    A fresh directory and video belong to this task. Check that it is ready.
-2. Observe the cameras and joint feedback, reason about the goal, choose an action,
-   execute it, and observe again to evaluate what actually happened. Persist and
+2. Observe the cameras and joint feedback, reason about the goal, choose an action
+   or concurrent pair (one per arm), execute, and observe again. Persist and
    self-correct while a reasonable correction or useful diagnostic remains available.
    Prefer recovery and progress from the current pose. Try materially different
    grasps, paths, orientations, timing, or arm choices when observations justify them.
@@ -57,6 +57,15 @@ Write tool arguments as JSON to the request file. `observe` needs no arguments.
 Read result JSON even when the command exits nonzero: rejections are feedback.
 Display the returned absolute image paths with the available image-viewing tool.
 Do not open cameras through the underlying motor bridge; recording owns them.
+
+To move both arms concurrently, submit one `execute` call per arm before waiting
+for either result. With the CLI, launch both `robot-call ... execute` commands in
+parallel (for example, shell `&` with saved PIDs and `wait` for both), using separate
+request and output files. Choose concurrency when the task and observed clearance
+support it; the collision model does not check the other arm. Starts and finishes
+are not synchronized, and a rejection or stop on one arm does not stop the other.
+Inspect both results before the next action; one response's images may show the
+other arm still moving, so request a fresh observation after both finish if needed.
 
 Every recorder `execute` response includes `post_action` observations and concise
 `diagnostics`, whether the command completed, was rejected, or stopped. Inspect the
