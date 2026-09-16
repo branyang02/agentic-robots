@@ -66,8 +66,6 @@ support it; the collision model does not check the other arm. Starts and finishe
 are not synchronized, and a rejection or stop on one arm does not stop the other.
 Inspect both results before the next action; one response's images may show the
 other arm still moving, so request a fresh observation after both finish if needed.
-For complete request JSON and a recorded CLI example, see
-`docs/agentic-runs.md` under "Concurrent arm commands: recorded CLI example".
 
 Every recorder `execute` response includes `post_action` observations and concise
 `diagnostics`, whether the command completed, was rejected, or stopped. Inspect the
