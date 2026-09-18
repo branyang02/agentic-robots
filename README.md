@@ -386,4 +386,4 @@ The pinned i2rt fork includes the supplied UMI Flow finger CAD and separate visu
 and convex collision meshes. Joint frames, FK/IK, the 220 mm grasp site, and inertial
 properties are unchanged. The registered CAD ends about 10–11 mm before that
 intentional control reference; this is not a calibrated contact point. See the
-[model alignment and limitations](https://github.com/AfterQuery-Research/i2rt/blob/1a0b611a2ca1e60dfd3e31fe143cc169524628f4/i2rt/robot_models/gripper/linear_4310/README.md).
+[model alignment and limitations](https://github.com/AfterQuery-Research/i2rt/blob/d527fe853daaf663f2d5fc44ad1643da9ca5edbb/i2rt/robot_models/gripper/linear_4310/README.md).
