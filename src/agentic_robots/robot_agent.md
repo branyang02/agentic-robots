@@ -101,6 +101,10 @@ Grippers start passive until their first explicit jaw action.
 The agent chooses targets, durations, observation timing, and task completion. There
 is no fixed action budget or per-action approval, and no size, speed, acceleration,
 or temperature cap. Motion uses linear joint interpolation without time stretching.
+The model uses custom UMI finger geometry. Its 220 mm `grasp_site` is an intentional
+control reference, not a mesh vertex; the registered CAD ends about 10–11 mm
+before it. Do not infer a tool-offset correction from that gap. Finger collision
+shapes are conservative convex envelopes, not exact contact or grasp models.
 The collision model omits the table and the other arm: assess clearance from the
 scene and separate arms near shared goals. `completed` only means the command
 sequence finished; compare actual joints, errors, and images with the goal.
