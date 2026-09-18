@@ -379,3 +379,11 @@ they verify video decoding, camera layout, immutable observations, event logging
 transport/capture/log-write failures, and preservation of hold after recorder shutdown.
 HTTP test servers explicitly forbid CAN sockets. These validate software behavior,
 not physical dynamics or task success on the real robot.
+
+### Custom finger geometry
+
+The pinned i2rt fork includes the supplied UMI Flow finger CAD and separate visual
+and convex collision meshes. Joint frames, FK/IK, the 220 mm grasp site, and inertial
+properties are unchanged. The registered CAD ends about 10–11 mm before that
+intentional control reference; this is not a calibrated contact point. See the
+[model alignment and limitations](https://github.com/AfterQuery-Research/i2rt/blob/1a0b611a2ca1e60dfd3e31fe143cc169524628f4/i2rt/robot_models/gripper/linear_4310/README.md).
