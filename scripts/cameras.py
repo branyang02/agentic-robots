@@ -1,4 +1,4 @@
-"""Discover cameras, save previews, or test all configured RGB streams at 30 FPS."""
+"""Discover cameras, save previews, or test all configured RGB stream frame rates."""
 
 import concurrent.futures
 import json

@@ -43,9 +43,10 @@ def capture_command(cameras, output, epoch):
             command += ["-thread_queue_size", "64", "-timestamps", "abs", *input_args(camera)]
             origin = f"{epoch:.6f}/TB"
         filters += [
-            f"[{i}:v]setpts=PTS-{origin},"
-            f"scale=640:480:force_original_aspect_ratio=decrease,setsar=1,split[v{i}][p{i}]",
-            f"[v{i}]pad=640:480:(ow-iw)/2:(oh-ih)/2,"
+            # Only the overview is resized; native videos also retain input cadence.
+            f"[{i}:v]setpts=PTS-{origin},setsar=1,split=3[v{i}][p{i}][native{i}]",
+            f"[v{i}]scale=640:480:force_original_aspect_ratio=decrease,"
+            "pad=640:480:(ow-iw)/2:(oh-ih)/2,"
             f"drawtext=text='{role.upper()}':x=12:y=10:fontsize=24:fontcolor=white:"
             f"box=1:boxcolor=black@0.65[panel{i}]",
             f"[p{i}]fps=5[preview{i}]",
@@ -57,16 +58,17 @@ def capture_command(cameras, output, epoch):
         "drawtext=textfile=phase.txt:reload=1:expansion=none:"
         "x=260:y=h-28:fontsize=20:fontcolor=white[video]"
     ]
+    command += ["-filter_complex", ";".join(filters), "-map", "[video]"]
+    for i in range(len(ORDER)):
+        command += ["-map", f"[native{i}]"]
     command += [
-        "-filter_complex",
-        ";".join(filters),
-        "-map",
-        "[video]",
         "-c:v",
         "libx264",
         "-preset",
         "ultrafast",
         "-crf",
+        "18",
+        "-crf:v:0",
         "23",
         "-threads",
         "2",
@@ -76,8 +78,14 @@ def capture_command(cameras, output, epoch):
         "passthrough",
         "-flush_packets",
         "1",
-        str(output / "capture.mkv"),
     ]
+    # V4L2 timestamps include sub-frame jitter. A 1/FPS encoder timebase can round
+    # consecutive input frames onto the same PTS even with passthrough enabled.
+    for i in range(1, len(ORDER) + 1):
+        command += [f"-enc_time_base:v:{i}", "1:1000000"]
+    for i, name in enumerate(("overview", *ORDER)):
+        command += [f"-metadata:s:v:{i}", f"title={name}"]
+    command += [str(output / "capture.mkv")]
     for i, role in enumerate(ORDER):
         command += [
             "-map",
@@ -316,46 +324,53 @@ class Rollout:
         try:
             if not self.process or self.process.returncode not in (0, 255):
                 raise RuntimeError("Camera capture failed; inspect ffmpeg.log")
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-nostdin",
-                    "-y",
-                    "-copyts",
-                    "-i",
-                    str(self.output / "capture.mkv"),
-                    "-map",
-                    "0:v:0",
-                    "-c",
-                    "copy",
-                    "-movflags",
-                    "+faststart",
-                    str(self.output / "rollout.mp4"),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=60,
-            )
-            probe = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_format",
-                    "-show_streams",
-                    "-of",
-                    "json",
-                    str(self.output / "rollout.mp4"),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            self.manifest["video"] = json.loads(probe.stdout)
+            self.manifest["native_videos"] = {}
+            for i, name in enumerate(("rollout", *ORDER)):
+                path = self.output / f"{name}.mp4"
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-nostdin",
+                        "-y",
+                        "-copyts",
+                        "-i",
+                        str(self.output / "capture.mkv"),
+                        "-map",
+                        f"0:v:{i}",
+                        "-c",
+                        "copy",
+                        "-movflags",
+                        "+faststart",
+                        str(path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=60,
+                )
+                probe = subprocess.run(
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-show_format",
+                        "-show_streams",
+                        "-of",
+                        "json",
+                        str(path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                metadata = json.loads(probe.stdout)
+                if name == "rollout":
+                    self.manifest["video"] = metadata
+                else:
+                    self.manifest["native_videos"][name] = metadata
             self.state = "failed" if self.error else "finished"
         except Exception as exc:
             self.state, self.error = "failed", str(exc)

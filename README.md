@@ -63,24 +63,66 @@ Use each camera's printed stable device path:
 - `left` and `right`: ultrawides, MJPEG, 1280×720.
 - `top`: RealSense color stream, YUYV, 640×480.
 
-All request 30 FPS. RealSense capture is RGB only through V4L2; depth is not enabled.
+These discovery defaults request 30 FPS. RealSense capture is RGB only through V4L2;
+depth is not enabled. Configured capture can use higher-resolution modes below.
 Paths depend on the USB port. Rediscover after changing ports.
 
 ## Set hardware values
 
 Replace the placeholders below with the values printed during discovery.
-Run these exports in each terminal before using the setup scripts.
+Explicitly set each camera's width, height, and frame rate here too; the example
+uses the original 30 FPS modes. Run the full block in each terminal before using
+the setup scripts.
 
 ```bash
 export ROBOT_ID=dual-yam
 export LEFT_CAN=LEFT_ADAPTER_SERIAL
 export RIGHT_CAN=RIGHT_ADAPTER_SERIAL
+
 export LEFT_CAMERA=/dev/v4l/by-path/LEFT_CAMERA_PATH
+export LEFT_CAMERA_WIDTH=1280
+export LEFT_CAMERA_HEIGHT=720
+export LEFT_CAMERA_FPS=30
+
 export RIGHT_CAMERA=/dev/v4l/by-path/RIGHT_CAMERA_PATH
+export RIGHT_CAMERA_WIDTH=1280
+export RIGHT_CAMERA_HEIGHT=720
+export RIGHT_CAMERA_FPS=30
+
 export TOP_CAMERA=/dev/v4l/by-path/REALSENSE_RGB_PATH
+export TOP_CAMERA_WIDTH=640
+export TOP_CAMERA_HEIGHT=480
+export TOP_CAMERA_FPS=30
 ```
 
 `TOP_CAMERA` is the RealSense RGB device path printed by discovery.
+
+To persist these values, save the same assignments without `export` in the
+repository's `.env`, preserving its other values. Then use `uv run --env-file .env`
+for every setup, bridge, recorder, and viewer command instead of `uv run`, and
+remove conflicting exports from the shell.
+
+**Highest-resolution option:** replace the width, height, and FPS values above
+with these settings, verified together in a real-hardware agent run on this setup:
+
+| Camera | Width | Height | FPS |
+|---|---:|---:|---:|
+| Left and right wrists | 1920 | 1200 | 5 |
+| Top | 1920 | 1080 | 8 |
+
+These are the highest resolutions advertised by our cameras; lower FPS limits USB
+and encoding load. The run retained full-resolution agent images and videos, with
+occasional overhead frame drops. Supported modes depend on the camera, USB connection,
+and host; inspect them with `v4l2-ctl -d "$TOP_CAMERA" --list-formats-ext`
+(repeat for each wrist). Validate changed settings through the complete recorder
+pipeline; a capture-only rate check does not establish that native encoding can keep up.
+`setup-cameras list` uses discovery defaults; `preview` and `check` use your settings.
+
+Run the [camera checks](#check-cameras) below. Existing services must then be
+restarted to load the changed code and environment; follow the
+[session checks and service startup instructions](docs/agentic-runs.md#start-the-controller-and-recorder).
+Never restart a controller holding enabled arms. Retain existing ports and recorder
+output paths when reloading an existing setup.
 
 ## Configure CAN
 
@@ -98,17 +140,47 @@ and termination. Repeating setup only clears the error state.
 
 ## Check cameras
 
+From the repository root, with no other process capturing from these devices:
+
 ```bash
 uv run setup-cameras preview
 uv run setup-cameras check
 ```
 
 Open `outputs/left/preview.png`, `outputs/right/preview.png`, and `outputs/top/preview.png`.
-Check side assignments, exposure, focus, and visibility of the work area.
+Check side assignments, exposure, focus, and visibility of the work area. Image
+dimensions must match each camera's configured width and height; all three rate
+checks must report `passed: true` at your configured FPS. These files are overwritten
+by later checks/previews.
 The scripts enable automatic exposure on MJPEG ultrawides to avoid stale manual settings.
 
 The check runs all three cameras concurrently for 15 seconds, prints measured rates,
-and saves `outputs/report.json`. It fails outside 29–31 FPS. This tests capture, not inference.
+and saves `outputs/report.json`. It requires each measured frame rate to be within
+5% of its configured rate. This tests capture, not inference.
+
+Snapshots and agent observations retain the configured camera resolution as PNGs.
+The recorded overview keeps its compact three-panel layout; only that video and
+the live viewer are scaled. Each recording also saves `left.mp4`, `top.mp4`, and
+`right.mp4` at the configured resolution and actual input frame cadence.
+These use H.264 CRF 18 with no resizing or frame-rate
+upsampling; they add CPU and disk usage. Higher-resolution observations also
+increase image payload sizes for model requests.
+
+After service reload, call the motor bridge's `observe` while recording is idle
+and confirm its returned image dimensions and empty camera errors. During the next
+recording, also confirm the saved observations retain those dimensions and inspect
+that recording's `ffmpeg.log` for capture errors: the rate check alone does not
+exercise the complete recorder pipeline. Use the existing endpoint ports from your
+setup; `uv run robot-call observe --url http://127.0.0.1:8767/mcp` targets the default bridge.
+
+To restore the original camera modes, use the values in the setup block above:
+1280×720 at 30 FPS for both wrists and 640×480 at 30 FPS overhead. Update your
+exports and `.env` if used, safely reload services, and repeat the checks. These
+are also the defaults if the nine camera-mode variables are unset. This keeps full-resolution
+observations at those sizes. To restore the exact previous behavior, including
+640-pixel-wide recorded observations and no native camera videos, also revert this
+entire camera PR, including its recorder changes. Removing configuration alone
+does not restore the previous recorder behavior.
 
 ## Live camera view
 
@@ -118,7 +190,7 @@ From a terminal on the robot's graphical desktop, with the hardware values expor
 uv run view-cameras
 ```
 
-One window shows **left | top (RealSense) | right** side by side at 30 FPS.
+One window shows **left | top (RealSense) | right** side by side using the configured rates.
 The views keep their original aspect ratios. Press **Q**, **Esc**, or close the window to quit.
 Stop other camera programs first. A headless terminal fails before opening the cameras.
 
@@ -344,7 +416,13 @@ The resulting directory contains:
 
 - `rollout.mp4`: the continuous left / top / right camera video, with elapsed time
   and phase notes. It preserves the full run, including pauses between actions.
-- `capture.mkv`: the capture container retained for recovery if finalization fails.
+- `left.mp4`, `top.mp4`, `right.mp4`: full-resolution individual camera videos at
+  their input cadence, without overlays. `manifest.json` records measured video
+  dimensions, frame rates, and duration under `native_videos`.
+- `capture.mkv`: the overview and three native-resolution video streams, retained
+  for recovery if MP4 finalization fails. Stream indices are 0=overview, 1=left,
+  2=top, 3=right; select one explicitly when inspecting this container. The MP4
+  files are remuxed without re-encoding.
 - `events.jsonl`: the prompt/notes, timestamped requests and responses, observations,
   and joint/velocity/gripper/temperature/health feedback sampled at a requested 5 Hz.
 - `observations/`: immutable images actually returned to the agent.
