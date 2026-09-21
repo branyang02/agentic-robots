@@ -91,19 +91,24 @@ Camera setup does not require enabling arms, configuring CAN, or calibrating gri
 
 With the three identified device paths already saved in `.env`, add or replace
 these nine settings in that file, one assignment per line. Preserve its other values.
-These are the highest resolutions advertised by this setup's connected cameras:
+These use the highest advertised resolutions and frame rates validated together
+in a camera-only native-recording test on this USB 2.0 setup:
 
 ```dotenv
 LEFT_CAMERA_WIDTH=1920
 LEFT_CAMERA_HEIGHT=1200
-LEFT_CAMERA_FPS=15
+LEFT_CAMERA_FPS=5
 RIGHT_CAMERA_WIDTH=1920
 RIGHT_CAMERA_HEIGHT=1200
-RIGHT_CAMERA_FPS=15
+RIGHT_CAMERA_FPS=5
 TOP_CAMERA_WIDTH=1920
 TOP_CAMERA_HEIGHT=1080
 TOP_CAMERA_FPS=8
 ```
+
+Higher supported frame rates remain configurable, but must be checked through the
+complete recorder pipeline on the intended USB connection and host; a capture-only
+rate check does not establish that native encoding can keep up.
 
 Use `uv run --env-file .env` for setup, bridge, recorder, and viewer commands, and
 remove conflicting camera-mode exports from the shell. Supported modes depend on
@@ -144,7 +149,7 @@ uv run --env-file .env setup-cameras check
 Open `outputs/left/preview.png`, `outputs/right/preview.png`, and `outputs/top/preview.png`.
 Check side assignments, exposure, focus, and visibility of the work area. For the
 high-resolution settings, image dimensions must be 1920×1200 for both wrists and
-1920×1080 overhead; all three rate checks must report `passed: true` (15/15/8 FPS
+1920×1080 overhead; all three rate checks must report `passed: true` (5/5/8 FPS
 within tolerance). These files are overwritten by later checks/previews.
 The scripts enable automatic exposure on MJPEG ultrawides to avoid stale manual settings.
 
@@ -154,8 +159,11 @@ and saves `outputs/report.json`. It requires each measured frame rate to be with
 
 Snapshots and agent observations retain the configured camera resolution as PNGs.
 The recorded overview keeps its compact three-panel layout; only that video and
-the live viewer are scaled. Higher-resolution observations also increase image
-payload sizes for model requests.
+the live viewer are scaled. Each recording also saves `left.mp4`, `top.mp4`, and
+`right.mp4` at the configured resolution and actual input frame cadence (5/8/5 FPS
+with the settings above). These use H.264 CRF 18 with no resizing or frame-rate
+upsampling; they add CPU and disk usage. Higher-resolution observations also
+increase image payload sizes for model requests.
 
 After service reload, call the motor bridge's `observe` while recording is idle
 and confirm its returned image dimensions and empty camera errors. During the next
@@ -169,8 +177,9 @@ To restore the previous camera modes, remove the nine `*_CAMERA_WIDTH`,
 then safely reload services and repeat the checks. Defaults remain 1280×720 at
 30 FPS for both wrists and 640×480 at 30 FPS overhead. This keeps full-resolution
 observations at those sizes. To restore the exact previous behavior, including
-640-pixel-wide recorded observations, also revert the camera code change;
-removing configuration alone does not undo that recorder change.
+640-pixel-wide recorded observations and no native camera videos, also revert this
+entire camera PR, including its recorder changes. Removing configuration alone
+does not restore the previous recorder behavior.
 
 ## Live camera view
 
@@ -406,7 +415,13 @@ The resulting directory contains:
 
 - `rollout.mp4`: the continuous left / top / right camera video, with elapsed time
   and phase notes. It preserves the full run, including pauses between actions.
-- `capture.mkv`: the capture container retained for recovery if finalization fails.
+- `left.mp4`, `top.mp4`, `right.mp4`: full-resolution individual camera videos at
+  their input cadence, without overlays. `manifest.json` records measured video
+  dimensions, frame rates, and duration under `native_videos`.
+- `capture.mkv`: the overview and three native-resolution video streams, retained
+  for recovery if MP4 finalization fails. Stream indices are 0=overview, 1=left,
+  2=top, 3=right; select one explicitly when inspecting this container. The MP4
+  files are remuxed without re-encoding.
 - `events.jsonl`: the prompt/notes, timestamped requests and responses, observations,
   and joint/velocity/gripper/temperature/health feedback sampled at a requested 5 Hz.
 - `observations/`: immutable images actually returned to the agent.

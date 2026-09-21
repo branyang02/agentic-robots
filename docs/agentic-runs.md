@@ -224,9 +224,11 @@ accepted as unavailable control. Outcome `paused` records an explicit user stop.
 Finalizing files during process cleanup is separate from completing a task.
 No recorder operation releases arm torque.
 
-Each directory contains `rollout.mp4`, `capture.mkv`, `events.jsonl`, `observations/`,
-`manifest.json`, `prompt.txt`, and `ffmpeg.log`. Video includes pauses between actions,
-camera labels, elapsed time, and phase notes. Events include tool requests/results,
+Each directory contains `rollout.mp4`, native-resolution `left.mp4`, `top.mp4`,
+`right.mp4`, `capture.mkv`, `events.jsonl`, `observations/`, `manifest.json`,
+`prompt.txt`, and `ffmpeg.log`. The overview includes pauses between actions,
+camera labels, elapsed time, and phase notes. Native videos preserve each camera's
+input cadence without overlays or resizing. Events include tool requests/results,
 immutable observations, and telemetry. Check the final manifest before claiming a
 complete recording. Camera timestamps are not hardware synchronized; video is not
 an independent measurement of Cartesian accuracy.

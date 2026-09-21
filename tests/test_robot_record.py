@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from unittest.mock import Mock
 
 import pytest
@@ -282,11 +283,13 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout, high_resoluti
     # Independent camera clocks do not produce identical input frame timestamps.
     rollout.cameras["top"]["device"] = "color=c=green:s=640x480:r=29"
     sizes = dict.fromkeys(ORDER, (640, 480))
+    rates = {"left": 30, "top": 29, "right": 30}
     if high_resolution:
         sizes = {"left": (1920, 1200), "top": (1920, 1080), "right": (1920, 1200)}
+        rates = {"left": 5, "top": 8, "right": 5}
         for role, color in zip(ORDER, ("red", "green", "blue")):
             width, height = sizes[role]
-            rate = 8 if role == "top" else 15
+            rate = rates[role]
             rollout.cameras[role]["device"] = f"color=c={color}:s={width}x{height}:r={rate}"
     try:
         rollout.start()
@@ -311,6 +314,21 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout, high_resoluti
         assert all(value < 10 for i, value in enumerate(pixel) if i != channel)
     assert any(e["kind"] == "telemetry" for e in events(rollout))
     assert float(rollout.manifest["video"]["format"]["duration"]) > 1
+    for channel, role in enumerate(ORDER):
+        native = frame(rollout.output / f"{role}.mp4")
+        assert native.size == sizes[role]
+        assert native.getpixel((native.width // 2, native.height // 2))[channel] > 100
+        metadata = rollout.manifest["native_videos"][role]
+        stream = metadata["streams"][0]
+        assert (stream["width"], stream["height"]) == sizes[role]
+        assert float(Fraction(stream["avg_frame_rate"])) == pytest.approx(rates[role], rel=0.01)
+        assert float(metadata["format"]["duration"]) > 1
+        # Native streams retain their final frames after the overview's shortest
+        # input ends; allow up to three frames when the source cadence is slow.
+        assert abs(
+            float(metadata["format"]["duration"])
+            - float(rollout.manifest["video"]["format"]["duration"])
+        ) < max(0.5, 3 / rates[role])
     packets = subprocess.run(
         [
             "ffprobe",
@@ -333,6 +351,43 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout, high_resoluti
     # Matroska stores millisecond timecodes: a 30 fps cadence alternates 33/34 ms.
     assert all(b - a == pytest.approx(1 / 30, abs=0.001) for a, b in zip(times, times[1:]))
     assert rollout.finish()["status"] == "finished"
+
+
+def test_native_video_preserves_irregular_camera_timestamps(rollout):
+    # Alternating 40 ms delay keeps input PTS ordered but would create duplicate
+    # native timestamps if the encoder rounded every frame to a 1/15 s timebase.
+    rollout.cameras["right"]["device"] = (
+        "color=c=blue:s=640x480:r=15,settb=1/1000000,setpts=PTS+40000*mod(N\\,2)"
+    )
+    try:
+        rollout.start()
+        time.sleep(1)
+    finally:
+        result = rollout.finish()
+    assert result["status"] == "finished"
+    assert "non-strictly-monotonic PTS" not in (rollout.output / "ffmpeg.log").read_text()
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+            str(rollout.output / "right.mp4"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    times = [float(line) for line in probe.stdout.splitlines()]
+    intervals = [b - a for a, b in zip(times, times[1:])]
+    assert len(intervals) >= 10
+    assert all(d > 0 for d in intervals)
+    assert min(intervals) == pytest.approx(1 / 15 - 0.04, abs=0.001)
+    assert max(intervals) == pytest.approx(1 / 15 + 0.04, abs=0.001)
 
 
 @pytest.mark.e2e
