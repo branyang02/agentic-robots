@@ -1,5 +1,6 @@
 """Reusable cameras discovery and configuration helpers."""
 
+import math
 import os
 import re
 import subprocess
@@ -36,15 +37,25 @@ def discover():
 
 
 def configured_cameras(roles=("left", "right", "top")):
-    return {
-        role: dict(
-            device=os.environ[f"{role.upper()}_CAMERA"],
+    cameras = {}
+    for role in roles:
+        prefix = f"{role.upper()}_CAMERA"
+        camera = dict(
+            device=os.environ[prefix],
             format="yuyv422" if role == "top" else "mjpeg",
-            width=640 if role == "top" else 1280,
-            height=480 if role == "top" else 720,
+            width=int(os.environ.get(f"{prefix}_WIDTH", 640 if role == "top" else 1280)),
+            height=int(os.environ.get(f"{prefix}_HEIGHT", 480 if role == "top" else 720)),
+            fps=float(os.environ.get(f"{prefix}_FPS", 30)),
         )
-        for role in roles
-    }
+        if (
+            camera["width"] <= 0
+            or camera["height"] <= 0
+            or not math.isfinite(camera["fps"])
+            or camera["fps"] <= 0
+        ):
+            raise ValueError(f"{prefix} width, height, and FPS must be positive and finite")
+        cameras[role] = camera
+    return cameras
 
 
 def input_args(camera):
@@ -54,7 +65,7 @@ def input_args(camera):
         "-input_format",
         camera["format"],
         "-framerate",
-        "30",
+        f"{camera.get('fps', 30):g}",
         "-video_size",
         f"{camera['width']}x{camera['height']}",
         "-i",
@@ -116,8 +127,13 @@ def capture(name, camera, seconds):
     result = subprocess.run(command, capture_output=True, text=True, timeout=(seconds or 4) + 20)
     if result.returncode:
         raise RuntimeError(f"{name}: {result.stderr.strip()}")
+    requested = dict(
+        requested_width=camera["width"],
+        requested_height=camera["height"],
+        requested_fps=camera.get("fps", 30),
+    )
     if not seconds:
-        return {"camera": name, "preview": str(output / "preview.png")}
+        return {"camera": name, "preview": str(output / "preview.png"), **requested}
     frames = [int(value) for value in re.findall(r"^frame=(\d+)$", result.stdout, re.MULTILINE)]
     timestamps = [
         int(value) for value in re.findall(r"^out_time_us=(\d+)$", result.stdout, re.MULTILINE)
@@ -125,11 +141,13 @@ def capture(name, camera, seconds):
     if not frames or not timestamps or timestamps[-1] <= 0:
         raise RuntimeError(f"{name}: no measurable frames")
     fps = frames[-1] / (timestamps[-1] / 1_000_000)
+    target_fps = camera.get("fps", 30)
     return dict(
         camera=name,
         frames=frames[-1],
         fps=round(fps, 2),
+        **requested,
         wall_seconds=round(time.monotonic() - start, 2),
-        passed=29 <= fps <= 31,
+        passed=abs(fps - target_fps) <= target_fps * 0.05,
         warnings=result.stderr.strip(),
     )

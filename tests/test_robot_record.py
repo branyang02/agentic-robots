@@ -277,9 +277,17 @@ def frame(path):
     return Image.open(io.BytesIO(result.stdout)).convert("RGB")
 
 
-def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout):
+@pytest.mark.parametrize("high_resolution", [False, True])
+def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout, high_resolution):
     # Independent camera clocks do not produce identical input frame timestamps.
     rollout.cameras["top"]["device"] = "color=c=green:s=640x480:r=29"
+    sizes = dict.fromkeys(ORDER, (640, 480))
+    if high_resolution:
+        sizes = {"left": (1920, 1200), "top": (1920, 1080), "right": (1920, 1200)}
+        for role, color in zip(ORDER, ("red", "green", "blue")):
+            width, height = sizes[role]
+            rate = 8 if role == "top" else 15
+            rollout.cameras[role]["device"] = f"color=c={color}:s={width}x{height}:r={rate}"
     try:
         rollout.start()
         assert rollout.status()["ready"]
@@ -287,6 +295,11 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout):
         rollout.note("Recording synthetic test streams")
         time.sleep(1)
         assert (rollout.output / "top.png").stat().st_mtime > before
+        images, errors = rollout.snapshots(after=time.time())
+        assert not errors
+        for role, size in sizes.items():
+            with Image.open(images[role]["path"]) as observation:
+                assert observation.size == size
     finally:
         result = rollout.finish()
     assert result["status"] == "finished", (rollout.output / "ffmpeg.log").read_text()

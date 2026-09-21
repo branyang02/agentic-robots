@@ -63,7 +63,8 @@ Use each camera's printed stable device path:
 - `left` and `right`: ultrawides, MJPEG, 1280×720.
 - `top`: RealSense color stream, YUYV, 640×480.
 
-All request 30 FPS. RealSense capture is RGB only through V4L2; depth is not enabled.
+These discovery defaults request 30 FPS. RealSense capture is RGB only through V4L2;
+depth is not enabled. Configured capture can use higher-resolution modes below.
 Paths depend on the USB port. Rediscover after changing ports.
 
 ## Set hardware values
@@ -82,6 +83,41 @@ export TOP_CAMERA=/dev/v4l/by-path/REALSENSE_RGB_PATH
 
 `TOP_CAMERA` is the RealSense RGB device path printed by discovery.
 
+### High-resolution camera setup
+
+Use a checkout containing the configurable-camera and full-resolution-observation
+changes. Finish active recording and close camera viewers before testing cameras.
+Camera setup does not require enabling arms, configuring CAN, or calibrating grippers.
+
+With the three identified device paths already saved in `.env`, add or replace
+these nine settings in that file, one assignment per line. Preserve its other values.
+These are the highest resolutions advertised by this setup's connected cameras:
+
+```dotenv
+LEFT_CAMERA_WIDTH=1920
+LEFT_CAMERA_HEIGHT=1200
+LEFT_CAMERA_FPS=15
+RIGHT_CAMERA_WIDTH=1920
+RIGHT_CAMERA_HEIGHT=1200
+RIGHT_CAMERA_FPS=15
+TOP_CAMERA_WIDTH=1920
+TOP_CAMERA_HEIGHT=1080
+TOP_CAMERA_FPS=8
+```
+
+Use `uv run --env-file .env` for setup, bridge, recorder, and viewer commands, and
+remove conflicting camera-mode exports from the shell. Supported modes depend on
+the camera and USB connection; inspect them with
+`v4l2-ctl -d "$TOP_CAMERA" --list-formats-ext` using the exported device paths above
+(repeat for each wrist). `setup-cameras list` still uses discovery defaults;
+`preview` and `check` use the configured values.
+
+Run the [camera checks](#check-cameras) below. Existing services must then be
+restarted to load the changed code and environment; follow the
+[session checks and service startup instructions](docs/agentic-runs.md#start-the-controller-and-recorder).
+Never restart a controller holding enabled arms. Retain existing ports and recorder
+output paths when reloading an existing setup.
+
 ## Configure CAN
 
 Turn on motor power and release the emergency stop. USB power alone is not enough.
@@ -98,17 +134,43 @@ and termination. Repeating setup only clears the error state.
 
 ## Check cameras
 
+From the repository root, with no other process capturing from these devices:
+
 ```bash
-uv run setup-cameras preview
-uv run setup-cameras check
+uv run --env-file .env setup-cameras preview
+uv run --env-file .env setup-cameras check
 ```
 
 Open `outputs/left/preview.png`, `outputs/right/preview.png`, and `outputs/top/preview.png`.
-Check side assignments, exposure, focus, and visibility of the work area.
+Check side assignments, exposure, focus, and visibility of the work area. For the
+high-resolution settings, image dimensions must be 1920×1200 for both wrists and
+1920×1080 overhead; all three rate checks must report `passed: true` (15/15/8 FPS
+within tolerance). These files are overwritten by later checks/previews.
 The scripts enable automatic exposure on MJPEG ultrawides to avoid stale manual settings.
 
 The check runs all three cameras concurrently for 15 seconds, prints measured rates,
-and saves `outputs/report.json`. It fails outside 29–31 FPS. This tests capture, not inference.
+and saves `outputs/report.json`. It requires each measured frame rate to be within
+5% of its configured rate. This tests capture, not inference.
+
+Snapshots and agent observations retain the configured camera resolution as PNGs.
+The recorded overview keeps its compact three-panel layout; only that video and
+the live viewer are scaled. Higher-resolution observations also increase image
+payload sizes for model requests.
+
+After service reload, call the motor bridge's `observe` while recording is idle
+and confirm its returned image dimensions and empty camera errors. During the next
+recording, also confirm the saved observations retain those dimensions and inspect
+that recording's `ffmpeg.log` for capture errors: the rate check alone does not
+exercise the complete recorder pipeline. Use the existing endpoint ports from your
+setup; `uv run robot-call observe --url http://127.0.0.1:8767/mcp` targets the default bridge.
+
+To restore the previous camera modes, remove the nine `*_CAMERA_WIDTH`,
+`*_CAMERA_HEIGHT`, and `*_CAMERA_FPS` settings from `.env` and any shell exports,
+then safely reload services and repeat the checks. Defaults remain 1280×720 at
+30 FPS for both wrists and 640×480 at 30 FPS overhead. This keeps full-resolution
+observations at those sizes. To restore the exact previous behavior, including
+640-pixel-wide recorded observations, also revert the camera code change;
+removing configuration alone does not undo that recorder change.
 
 ## Live camera view
 
@@ -118,7 +180,7 @@ From a terminal on the robot's graphical desktop, with the hardware values expor
 uv run view-cameras
 ```
 
-One window shows **left | top (RealSense) | right** side by side at 30 FPS.
+One window shows **left | top (RealSense) | right** side by side using the configured rates.
 The views keep their original aspect ratios. Press **Q**, **Esc**, or close the window to quit.
 Stop other camera programs first. A headless terminal fails before opening the cameras.
 

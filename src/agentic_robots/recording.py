@@ -43,9 +43,10 @@ def capture_command(cameras, output, epoch):
             command += ["-thread_queue_size", "64", "-timestamps", "abs", *input_args(camera)]
             origin = f"{epoch:.6f}/TB"
         filters += [
-            f"[{i}:v]setpts=PTS-{origin},"
-            f"scale=640:480:force_original_aspect_ratio=decrease,setsar=1,split[v{i}][p{i}]",
-            f"[v{i}]pad=640:480:(ow-iw)/2:(oh-ih)/2,"
+            # Observations retain sensor resolution; only the overview video is scaled.
+            f"[{i}:v]setpts=PTS-{origin},setsar=1,split[v{i}][p{i}]",
+            f"[v{i}]scale=640:480:force_original_aspect_ratio=decrease,"
+            "pad=640:480:(ow-iw)/2:(oh-ih)/2,"
             f"drawtext=text='{role.upper()}':x=12:y=10:fontsize=24:fontcolor=white:"
             f"box=1:boxcolor=black@0.65[panel{i}]",
             f"[p{i}]fps=5[preview{i}]",
