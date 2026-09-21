@@ -70,52 +70,53 @@ Paths depend on the USB port. Rediscover after changing ports.
 ## Set hardware values
 
 Replace the placeholders below with the values printed during discovery.
-Run these exports in each terminal before using the setup scripts.
+Explicitly set each camera's width, height, and frame rate here too; the example
+uses the original 30 FPS modes. Run the full block in each terminal before using
+the setup scripts.
 
 ```bash
 export ROBOT_ID=dual-yam
 export LEFT_CAN=LEFT_ADAPTER_SERIAL
 export RIGHT_CAN=RIGHT_ADAPTER_SERIAL
+
 export LEFT_CAMERA=/dev/v4l/by-path/LEFT_CAMERA_PATH
+export LEFT_CAMERA_WIDTH=1280
+export LEFT_CAMERA_HEIGHT=720
+export LEFT_CAMERA_FPS=30
+
 export RIGHT_CAMERA=/dev/v4l/by-path/RIGHT_CAMERA_PATH
+export RIGHT_CAMERA_WIDTH=1280
+export RIGHT_CAMERA_HEIGHT=720
+export RIGHT_CAMERA_FPS=30
+
 export TOP_CAMERA=/dev/v4l/by-path/REALSENSE_RGB_PATH
+export TOP_CAMERA_WIDTH=640
+export TOP_CAMERA_HEIGHT=480
+export TOP_CAMERA_FPS=30
 ```
 
 `TOP_CAMERA` is the RealSense RGB device path printed by discovery.
 
-### High-resolution camera setup
+To persist these values, save the same assignments without `export` in the
+repository's `.env`, preserving its other values. Then use `uv run --env-file .env`
+for every setup, bridge, recorder, and viewer command instead of `uv run`, and
+remove conflicting exports from the shell.
 
-Use a checkout containing the configurable-camera and full-resolution-observation
-changes. Finish active recording and close camera viewers before testing cameras.
-Camera setup does not require enabling arms, configuring CAN, or calibrating grippers.
+**Highest-resolution option:** replace the width, height, and FPS values above
+with these settings, verified together in a real-hardware agent run on this setup:
 
-With the three identified device paths already saved in `.env`, add or replace
-these nine settings in that file, one assignment per line. Preserve its other values.
-These use the highest advertised resolutions and frame rates validated together
-in a camera-only native-recording test on this USB 2.0 setup:
+| Camera | Width | Height | FPS |
+|---|---:|---:|---:|
+| Left and right wrists | 1920 | 1200 | 5 |
+| Top | 1920 | 1080 | 8 |
 
-```dotenv
-LEFT_CAMERA_WIDTH=1920
-LEFT_CAMERA_HEIGHT=1200
-LEFT_CAMERA_FPS=5
-RIGHT_CAMERA_WIDTH=1920
-RIGHT_CAMERA_HEIGHT=1200
-RIGHT_CAMERA_FPS=5
-TOP_CAMERA_WIDTH=1920
-TOP_CAMERA_HEIGHT=1080
-TOP_CAMERA_FPS=8
-```
-
-Higher supported frame rates remain configurable, but must be checked through the
-complete recorder pipeline on the intended USB connection and host; a capture-only
-rate check does not establish that native encoding can keep up.
-
-Use `uv run --env-file .env` for setup, bridge, recorder, and viewer commands, and
-remove conflicting camera-mode exports from the shell. Supported modes depend on
-the camera and USB connection; inspect them with
-`v4l2-ctl -d "$TOP_CAMERA" --list-formats-ext` using the exported device paths above
-(repeat for each wrist). `setup-cameras list` still uses discovery defaults;
-`preview` and `check` use the configured values.
+These are the highest resolutions advertised by our cameras; lower FPS limits USB
+and encoding load. The run retained full-resolution agent images and videos, with
+occasional overhead frame drops. Supported modes depend on the camera, USB connection,
+and host; inspect them with `v4l2-ctl -d "$TOP_CAMERA" --list-formats-ext`
+(repeat for each wrist). Validate changed settings through the complete recorder
+pipeline; a capture-only rate check does not establish that native encoding can keep up.
+`setup-cameras list` uses discovery defaults; `preview` and `check` use your settings.
 
 Run the [camera checks](#check-cameras) below. Existing services must then be
 restarted to load the changed code and environment; follow the
@@ -142,15 +143,15 @@ and termination. Repeating setup only clears the error state.
 From the repository root, with no other process capturing from these devices:
 
 ```bash
-uv run --env-file .env setup-cameras preview
-uv run --env-file .env setup-cameras check
+uv run setup-cameras preview
+uv run setup-cameras check
 ```
 
 Open `outputs/left/preview.png`, `outputs/right/preview.png`, and `outputs/top/preview.png`.
-Check side assignments, exposure, focus, and visibility of the work area. For the
-high-resolution settings, image dimensions must be 1920×1200 for both wrists and
-1920×1080 overhead; all three rate checks must report `passed: true` (5/5/8 FPS
-within tolerance). These files are overwritten by later checks/previews.
+Check side assignments, exposure, focus, and visibility of the work area. Image
+dimensions must match each camera's configured width and height; all three rate
+checks must report `passed: true` at your configured FPS. These files are overwritten
+by later checks/previews.
 The scripts enable automatic exposure on MJPEG ultrawides to avoid stale manual settings.
 
 The check runs all three cameras concurrently for 15 seconds, prints measured rates,
@@ -160,8 +161,8 @@ and saves `outputs/report.json`. It requires each measured frame rate to be with
 Snapshots and agent observations retain the configured camera resolution as PNGs.
 The recorded overview keeps its compact three-panel layout; only that video and
 the live viewer are scaled. Each recording also saves `left.mp4`, `top.mp4`, and
-`right.mp4` at the configured resolution and actual input frame cadence (5/8/5 FPS
-with the settings above). These use H.264 CRF 18 with no resizing or frame-rate
+`right.mp4` at the configured resolution and actual input frame cadence.
+These use H.264 CRF 18 with no resizing or frame-rate
 upsampling; they add CPU and disk usage. Higher-resolution observations also
 increase image payload sizes for model requests.
 
@@ -172,10 +173,10 @@ that recording's `ffmpeg.log` for capture errors: the rate check alone does not
 exercise the complete recorder pipeline. Use the existing endpoint ports from your
 setup; `uv run robot-call observe --url http://127.0.0.1:8767/mcp` targets the default bridge.
 
-To restore the previous camera modes, remove the nine `*_CAMERA_WIDTH`,
-`*_CAMERA_HEIGHT`, and `*_CAMERA_FPS` settings from `.env` and any shell exports,
-then safely reload services and repeat the checks. Defaults remain 1280×720 at
-30 FPS for both wrists and 640×480 at 30 FPS overhead. This keeps full-resolution
+To restore the original camera modes, use the values in the setup block above:
+1280×720 at 30 FPS for both wrists and 640×480 at 30 FPS overhead. Update your
+exports and `.env` if used, safely reload services, and repeat the checks. These
+are also the defaults if the nine camera-mode variables are unset. This keeps full-resolution
 observations at those sizes. To restore the exact previous behavior, including
 640-pixel-wide recorded observations and no native camera videos, also revert this
 entire camera PR, including its recorder changes. Removing configuration alone
