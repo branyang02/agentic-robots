@@ -35,7 +35,9 @@ For each robot task:
    0.05 rad/s, no latched fault)
    and refuses if either arm is unverified or actions are active. Use its detailed
    feedback to correct the return. These are completion tolerances, not motion limits.
-5. Review the saved `rollout.mp4`, including key movements, failures, and final outcome.
+5. Review the saved videos listed in `manifest.json`, including key movements,
+   failures, and final outcome. The Rust backend saves `left.mp4`, `top.mp4`, and
+   `right.mp4`; the legacy backend also provides `rollout.mp4`.
    Inspect video or extracted frames and state which you reviewed. Then call `recording`
    with `{"operation":"review","review":{"outcome":"success","summary":"<observed result>",
    "evidence":["<video timestamp/frame and relevant feedback>"]}}`.
@@ -76,9 +78,11 @@ pose or the commanded endpoint. `gripper` includes measured opening and, for the
 requested jaw action, its requested opening, error, completion status, and whether
 it was interrupted. An interrupted jaw action may hold a partial opening; recovery
 does not finish closure or establish a secure grasp. Reassess before carrying.
-Post-action camera frames are published after the action response from the motor
-controller; publication times are not synchronized sensor exposure times. Missing
-or stale images/feedback appear in `post_action.errors`; never treat missing evidence
+With the Rust camera backend, each image request waits for a newly delivered camera
+frame; post-action requests happen after the motor response and feedback check.
+Images contain no capture timestamps. Cameras are not synchronized, and a new frame
+does not guarantee the scene has settled. Missing images or feedback appear in
+`post_action.errors`; never treat missing evidence
 as success or replay an action merely because its post-action observation failed.
 You may always request additional `observe` or `session(status)` calls when more
 views, newer feedback, or clarification is useful. The bundled response reduces

@@ -1,10 +1,12 @@
 """Reusable cameras discovery and configuration helpers."""
 
+import json
 import math
 import os
 import re
 import subprocess
 import time
+import warnings
 from pathlib import Path
 
 
@@ -32,16 +34,73 @@ def discover():
             continue  # Depth/IR/metadata nodes are not RGB cameras.
         node = device.resolve().name
         name = (Path("/sys/class/video4linux") / node / "name").read_text().strip()
-        cameras.append(dict(device=str(device), format=fmt, width=width, height=height, name=name))
+        cameras.append(
+            dict(
+                device=str(device),
+                type="realsense" if "realsense" in name.lower() else "usb",
+                format=fmt,
+                width=width,
+                height=height,
+                fps=30,
+                name=name,
+            )
+        )
     return cameras
+
+
+def camera_config(value, prefix):
+    """Normalize an explicit camera JSON object; the role never selects its driver."""
+    try:
+        config = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{prefix} must be a quoted JSON object") from exc
+    required = {"path", "type", "width", "height", "fps"}
+    if not isinstance(config, dict) or required - config.keys():
+        raise ValueError(f"{prefix} requires path, type, width, height, and fps")
+    if config.keys() - required - {"format"}:
+        raise ValueError(
+            f"{prefix} has unknown fields: {sorted(config.keys() - required - {'format'})}"
+        )
+    if config["type"] not in ("usb", "realsense"):
+        raise ValueError(f"{prefix} type must be usb or realsense")
+    if not isinstance(config["path"], str) or not Path(config["path"]).is_absolute():
+        raise ValueError(f"{prefix} path must be an absolute camera device path")
+    if any(type(config[k]) is not int or config[k] <= 0 for k in ("width", "height")) or (
+        type(config["fps"]) not in (int, float)
+        or not math.isfinite(config["fps"])
+        or config["fps"] <= 0
+    ):
+        raise ValueError(
+            f"{prefix} width/height must be positive integers and FPS positive and finite"
+        )
+    fmt = config.get("format", "yuyv422" if config["type"] == "realsense" else "mjpeg")
+    if fmt not in ("mjpeg", "yuyv422") or (config["type"] == "realsense" and fmt != "yuyv422"):
+        raise ValueError(f"{prefix}: USB supports mjpeg/yuyv422; RealSense RGB requires yuyv422")
+    return {
+        "device": config["path"],
+        "type": config["type"],
+        "format": fmt,
+        **{k: config[k] for k in ("width", "height", "fps")},
+    }
 
 
 def configured_cameras(roles=("left", "right", "top")):
     cameras = {}
     for role in roles:
         prefix = f"{role.upper()}_CAMERA"
+        value = os.environ[prefix]
+        if not value.startswith("/"):
+            cameras[role] = camera_config(value, prefix)
+            continue
+        warnings.warn(
+            f"{prefix}: path-only camera settings are deprecated; use a JSON object "
+            "with path, type, width, height, and fps",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         camera = dict(
-            device=os.environ[prefix],
+            device=value,
+            type="realsense" if role == "top" else "usb",
             format="yuyv422" if role == "top" else "mjpeg",
             width=int(os.environ.get(f"{prefix}_WIDTH", 640 if role == "top" else 1280)),
             height=int(os.environ.get(f"{prefix}_HEIGHT", 480 if role == "top" else 720)),

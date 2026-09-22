@@ -388,6 +388,7 @@ class RecordingBridge:
         output_root=Path("outputs/rollouts"),
         cameras=None,
         upstream="http://127.0.0.1:8767/mcp",
+        camera_backend="ffmpeg",
     ):
         self.rollout = rollout
         self.output_root = Path(output_root).resolve()
@@ -397,6 +398,9 @@ class RecordingBridge:
         self.binding = None
         self.watch_error = None
         self.action_feedback = ActionFeedback()
+        if camera_backend not in {"ffmpeg", "rust"}:
+            raise ValueError("camera_backend must be ffmpeg or rust")
+        self.camera_backend = camera_backend
 
     def status(self):
         result = self.rollout.status() if self.rollout else {"status": "idle", "ready": False}
@@ -437,7 +441,12 @@ class RecordingBridge:
                 output = self.output_root / (
                     time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
                 )
-                self.rollout = Rollout(output, text, self.cameras(), self.upstream)
+                rollout_type = Rollout
+                if self.camera_backend == "rust":
+                    from agentic_robots.rust_recording import RustRollout
+
+                    rollout_type = RustRollout
+                self.rollout = rollout_type(output, text, self.cameras(), self.upstream)
                 if r and task["phase"] == "retry":
                     self.rollout.manifest["task"].update(
                         previous_attempt=str(r.output), correction=task["review"]["correction"]
@@ -602,7 +611,8 @@ class RecordingBridge:
                 observation = self.observe(after=completed)
             except Exception as exc:
                 observation = {"images": {}, "arms": {}, "errors": {"observation": str(exc)}}
-            observation["action_response_unix"] = completed
+            if self.camera_backend == "ffmpeg":
+                observation["action_response_unix"] = completed
             try:
                 result = self.action_feedback.enrich(observation, action, result)
             except Exception as exc:
@@ -682,25 +692,27 @@ class RecordingBridge:
     def observe(self, after=None):
         start = time.time()
         r = self.rollout
+        # Obtain potentially slow feedback/status before requesting the newest images.
+        state = self.forward("session", {"operation": "status"})
+        recording = self.status()
         try:
             images, errors = (
                 r.snapshots(after=after) if r else ({}, {"recording": "Start recording for images"})
             )
         except Exception as exc:
             images, errors = {}, {"cameras": str(exc)}
-        state = self.forward("session", {"operation": "status"})
         observation = {
-            "capture_started_unix": start,
-            "capture_finished_unix": time.time(),
             "images": images,
             "arms": state.get("arms", {}),
             "faults": state.get("faults", {}),
             "errors": {**state.get("errors", {}), **errors},
-            "recording": self.status(),
+            "recording": recording,
             "frame": "arm base; no calibrated world transform",
         }
         if "error" in state:
             observation["errors"]["controller"] = state["error"]
+        if self.camera_backend == "ffmpeg":
+            observation.update(capture_started_unix=start, capture_finished_unix=time.time())
         if r:
             try:
                 r.event("observation", observation=observation)

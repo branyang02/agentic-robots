@@ -22,6 +22,8 @@ Complete the [README hardware setup](../README.md): dependencies, adapters, CAN,
 cameras, and gripper calibration. Save `ROBOT_ID`, `LEFT_CAN`, `RIGHT_CAN`,
 `LEFT_CAMERA`, `RIGHT_CAMERA`, and `TOP_CAMERA` as shell assignments in the ignored
 `.env` file. Calibration stays local in `calibration/<ROBOT_ID>.json`.
+Camera values are single-quoted JSON objects containing `type`, `path`, `width`,
+`height`, and `fps`; either camera type can serve any role. See the README examples.
 Run the following commands from the repository root on the robot computer.
 
 Inspect an existing controller first:
@@ -49,6 +51,13 @@ Stop other camera viewers, then run the recorder in a second terminal:
 ```bash
 uv run --env-file .env robot-record --output-root outputs/rollouts --port 8768
 ```
+
+After building the experimental [Rust camera service](rust-cameras.md), append
+`--camera-backend rust` to record separate native-resolution `left.mp4`, `top.mp4`,
+and `right.mp4` videos and return newly delivered frames on request. The agent
+tools are unchanged. Omitting the flag retains the legacy FFmpeg backend; switching
+recorders does not require restarting the motor controller. Finish the current
+recording before changing camera ownership.
 
 Keep both terminals running throughout the task.
 The controller starts disconnected and enables no motors until the agent starts
@@ -214,7 +223,7 @@ motion limits. Rejections include measured feedback, tolerances, and per-arm rea
 and a blocked decision requires a `constraint`. Evidence is the agent's assessment;
 the harness does not independently judge the video or prove task impossibility.
 
-New task motion requires a ready recording with all three streams fresh. `return`
+New task motion requires a ready recording with all three cameras available. `return`
 declares intent without moving and permits agent-chosen return actions with best-effort
 logging if recording fails. Controller checks still apply. Status, recovery, and explicit
 controller stop remain available on logging failures. An exceptional review with outcome
@@ -224,13 +233,14 @@ accepted as unavailable control. Outcome `paused` records an explicit user stop.
 Finalizing files during process cleanup is separate from completing a task.
 No recorder operation releases arm torque.
 
-Each directory contains `rollout.mp4`, native-resolution `left.mp4`, `top.mp4`,
-`right.mp4`, `capture.mkv`, `events.jsonl`, `observations/`, `manifest.json`,
-`prompt.txt`, and `ffmpeg.log`. The overview includes pauses between actions,
+Each directory contains native-resolution `left.mp4`, `top.mp4`, `right.mp4`,
+`events.jsonl`, `observations/`, `manifest.json`, `prompt.txt`, and capture logs.
+The legacy backend also writes `rollout.mp4`, `capture.mkv`, and `ffmpeg.log`; the
+Rust backend writes per-camera `*-worker.log` files. The legacy overview includes pauses between actions,
 camera labels, elapsed time, and phase notes. Native videos preserve each camera's
 input cadence without overlays or resizing. Events include tool requests/results,
 immutable observations, and telemetry. Check the final manifest before claiming a
-complete recording. Camera timestamps are not hardware synchronized; video is not
+complete recording. Cameras are not hardware synchronized; video is not
 an independent measurement of Cartesian accuracy.
 
 The agent should inspect the recorded movement and state whether it reviewed video

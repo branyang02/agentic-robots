@@ -47,6 +47,7 @@ def test_help_and_unknown_options(main, argv, code, monkeypatch):
         (robot_record.main, ["--output-root"]),
         (robot_record.main, ["--prompt-file", "prompt.txt"]),
         (robot_record.main, ["--port", "invalid"]),
+        (robot_record.main, ["--camera-backend", "invalid"]),
         (robot_init.main, []),
         (robot_init.main, ["--thread-id", "test", "--timeout-s", "invalid"]),
     ],
@@ -72,7 +73,8 @@ def test_bridge_port_reaches_server(argv, port, monkeypatch):
 
 
 @pytest.mark.parametrize("custom", [False, True])
-def test_recorder_paths_and_server_options(tmp_path, monkeypatch, custom):
+@pytest.mark.parametrize("backend", ["ffmpeg", "rust"])
+def test_recorder_paths_and_server_options(tmp_path, monkeypatch, custom, backend):
     output = tmp_path / "new rollout"
     factory = Mock()
     factory.return_value.binding = None
@@ -80,6 +82,8 @@ def test_recorder_paths_and_server_options(tmp_path, monkeypatch, custom):
     monkeypatch.setattr(robot_record, "RecordingBridge", factory)
     monkeypatch.setattr(robot_record, "recording_server", lambda rollout: server)
     argv = ["robot-record", "--output-root", str(output)]
+    if backend == "rust":
+        argv += ["--camera-backend", backend]
     upstream = "http://127.0.0.1:8767/mcp"
     port = 8768
     if custom:
@@ -87,7 +91,7 @@ def test_recorder_paths_and_server_options(tmp_path, monkeypatch, custom):
         argv += ["--upstream", upstream, "--port", str(port)]
     monkeypatch.setattr(sys, "argv", argv)
     robot_record.main()
-    factory.assert_called_once_with(output_root=output, upstream=upstream)
+    factory.assert_called_once_with(output_root=output, upstream=upstream, camera_backend=backend)
     factory.return_value.start.assert_not_called()
     server.run.assert_called_once_with(transport="streamable-http", host="127.0.0.1", port=port)
     factory.return_value.rollout.finish.assert_called_once_with()

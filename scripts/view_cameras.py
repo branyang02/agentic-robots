@@ -85,8 +85,9 @@ def view(cameras):
     for path in paths:
         if not path.exists():
             raise ValueError(f"Camera missing: {path}. Run setup-cameras list.")
-    for role in ("left", "right"):
-        auto_exposure(cameras[role])
+    for camera in cameras.values():
+        if camera["format"] == "mjpeg":
+            auto_exposure(camera)
 
     capture = player = None
     with tempfile.TemporaryFile() as capture_log, tempfile.TemporaryFile() as player_log:
@@ -104,7 +105,7 @@ def view(cameras):
                     "error",
                     "-autoexit",
                     "-window_title",
-                    "Left | Top (RealSense) | Right — Q/Esc to quit",
+                    "Left | Top | Right — Q/Esc to quit",
                     "-x",
                     "1440",
                     "-y",

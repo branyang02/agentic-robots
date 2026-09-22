@@ -20,7 +20,7 @@ pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture
-def http_recorder(http_robot, tmp_path):  # noqa: F811
+def http_recorder(http_robot, tmp_path, request):  # noqa: F811
     _, command, controller, root = http_robot
     cmd, _ = command("session", {"operation": "status"})
     upstream = cmd[cmd.index("--url") + 1]
@@ -28,6 +28,27 @@ def http_recorder(http_robot, tmp_path):  # noqa: F811
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     output = tmp_path / "tasks"
+    backend = getattr(request, "param", "ffmpeg")
+    encoder_delay_ms = 0
+    if isinstance(backend, tuple):
+        backend, encoder_delay_ms = backend
+    camera_config = cameras()
+    environment = {**os.environ, "PYTHONPATH": str(root), "ROBOT_CAMERA_TEST_ONLY": "1"}
+    if backend == "rust":
+        environment["ROBOT_CAMERA_BINARY"] = request.getfixturevalue("rust_binary")
+        camera_config = {
+            role: dict(
+                device="synthetic",
+                format="synthetic",
+                width=320,
+                height=240,
+                fps=10,
+                test=dict(color=color, encoder_delay_ms=encoder_delay_ms),
+            )
+            for role, color in zip(
+                ("left", "top", "right"), ([255, 0, 0], [0, 255, 0], [0, 0, 255])
+            )
+        }
     program = tmp_path / "recorder_service.py"
     program.write_text(
         "import socket\noriginal=socket.socket\n"
@@ -38,7 +59,7 @@ def http_recorder(http_robot, tmp_path):  # noqa: F811
         "socket.socket=NoCAN\n"
         "from agentic_robots import recording\n"
         "from scripts import robot_record\n"
-        f"recording.configured_cameras=lambda:{cameras()!r}\n"
+        f"recording.configured_cameras=lambda:{camera_config!r}\n"
         "robot_record.main()\n"
     )
     log = (tmp_path / "recorder-service.log").open("w")
@@ -52,9 +73,11 @@ def http_recorder(http_robot, tmp_path):  # noqa: F811
             upstream,
             "--port",
             str(port),
+            "--camera-backend",
+            backend,
         ],
         cwd=root,
-        env={**os.environ, "PYTHONPATH": str(root)},
+        env=environment,
         stdout=log,
         stderr=log,
     )

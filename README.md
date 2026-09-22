@@ -70,8 +70,8 @@ Paths depend on the USB port. Rediscover after changing ports.
 ## Set hardware values
 
 Replace the placeholders below with the values printed during discovery.
-Explicitly set each camera's width, height, and frame rate here too; the example
-uses the original 30 FPS modes. Run the full block in each terminal before using
+Each camera is one quoted JSON object with `path`, `type`, `width`, `height`, and
+`fps`. The example uses the original 30 FPS modes. Run the full block in each terminal before using
 the setup scripts.
 
 ```bash
@@ -79,23 +79,19 @@ export ROBOT_ID=dual-yam
 export LEFT_CAN=LEFT_ADAPTER_SERIAL
 export RIGHT_CAN=RIGHT_ADAPTER_SERIAL
 
-export LEFT_CAMERA=/dev/v4l/by-path/LEFT_CAMERA_PATH
-export LEFT_CAMERA_WIDTH=1280
-export LEFT_CAMERA_HEIGHT=720
-export LEFT_CAMERA_FPS=30
-
-export RIGHT_CAMERA=/dev/v4l/by-path/RIGHT_CAMERA_PATH
-export RIGHT_CAMERA_WIDTH=1280
-export RIGHT_CAMERA_HEIGHT=720
-export RIGHT_CAMERA_FPS=30
-
-export TOP_CAMERA=/dev/v4l/by-path/REALSENSE_RGB_PATH
-export TOP_CAMERA_WIDTH=640
-export TOP_CAMERA_HEIGHT=480
-export TOP_CAMERA_FPS=30
+export LEFT_CAMERA='{"type":"usb","path":"/dev/v4l/by-path/LEFT_CAMERA_PATH","width":1280,"height":720,"fps":30}'
+export RIGHT_CAMERA='{"type":"usb","path":"/dev/v4l/by-path/RIGHT_CAMERA_PATH","width":1280,"height":720,"fps":30}'
+export TOP_CAMERA='{"type":"realsense","path":"/dev/v4l/by-path/REALSENSE_RGB_PATH","width":640,"height":480,"fps":30}'
 ```
 
-`TOP_CAMERA` is the RealSense RGB device path printed by discovery.
+Roles identify views, not camera types: any role can use `usb` or `realsense`.
+Use the RealSense **RGB** path, not its depth/IR/metadata nodes. RealSense RGB uses
+YUYV; USB defaults to MJPEG and also accepts `"format":"yuyv422"` when needed.
+Changing a wrist to RealSense only requires replacing that camera's JSON with its
+path and supported mode. Resolution and FPS are required; choose values advertised
+by that device. The Rust service verifies the negotiated mode without silent fallback.
+JSON settings ignore old separate `*_CAMERA_WIDTH/HEIGHT/FPS` variables. Path-only
+settings remain supported temporarily for rollback, with their original defaults.
 
 To persist these values, save the same assignments without `export` in the
 repository's `.env`, preserving its other values. Then use `uv run --env-file .env`
@@ -113,10 +109,14 @@ with these settings, verified together in a real-hardware agent run on this setu
 These are the highest resolutions advertised by our cameras; lower FPS limits USB
 and encoding load. The run retained full-resolution agent images and videos, with
 occasional overhead frame drops. Supported modes depend on the camera, USB connection,
-and host; inspect them with `v4l2-ctl -d "$TOP_CAMERA" --list-formats-ext`
-(repeat for each wrist). Validate changed settings through the complete recorder
+and host; inspect them with `v4l2-ctl -d /dev/v4l/by-path/ACTUAL_CAMERA_PATH --list-formats-ext`
+(repeat for each camera). Validate changed settings through the complete recorder
 pipeline; a capture-only rate check does not establish that native encoding can keep up.
 `setup-cameras list` uses discovery defaults; `preview` and `check` use your settings.
+
+The experimental [Rust camera backend](docs/rust-cameras.md) records three separate
+videos and creates images only on request. It has its own build and validation steps;
+the default remains the existing FFmpeg backend during validation.
 
 Run the [camera checks](#check-cameras) below. Existing services must then be
 restarted to load the changed code and environment; follow the
@@ -159,24 +159,26 @@ and saves `outputs/report.json`. It requires each measured frame rate to be with
 5% of its configured rate. This tests capture, not inference.
 
 Snapshots and agent observations retain the configured camera resolution as PNGs.
-The recorded overview keeps its compact three-panel layout; only that video and
-the live viewer are scaled. Each recording also saves `left.mp4`, `top.mp4`, and
-`right.mp4` at the configured resolution and actual input frame cadence.
-These use H.264 CRF 18 with no resizing or frame-rate
+Each recording saves `left.mp4`, `top.mp4`, and `right.mp4` at the configured
+resolution and actual input frame cadence. The legacy FFmpeg backend also creates
+a scaled three-panel overview; the Rust backend records only the separate views.
+The live viewer scales its display independently of recording.
+These use H.264 (legacy CRF 18; Rust constant quantizer 18), with no resizing or frame-rate
 upsampling; they add CPU and disk usage. Higher-resolution observations also
 increase image payload sizes for model requests.
 
 After service reload, call the motor bridge's `observe` while recording is idle
 and confirm its returned image dimensions and empty camera errors. During the next
 recording, also confirm the saved observations retain those dimensions and inspect
-that recording's `ffmpeg.log` for capture errors: the rate check alone does not
+that recording's capture logs and manifest for errors: the rate check alone does not
 exercise the complete recorder pipeline. Use the existing endpoint ports from your
 setup; `uv run robot-call observe --url http://127.0.0.1:8767/mcp` targets the default bridge.
 
 To restore the original camera modes, use the values in the setup block above:
 1280×720 at 30 FPS for both wrists and 640×480 at 30 FPS overhead. Update your
 exports and `.env` if used, safely reload services, and repeat the checks. These
-are also the defaults if the nine camera-mode variables are unset. This keeps full-resolution
+are also the defaults for legacy path-only settings without separate mode variables;
+JSON settings require explicit dimensions and FPS. This keeps full-resolution
 observations at those sizes. To restore the exact previous behavior, including
 640-pixel-wide recorded observations and no native camera videos, also revert this
 entire camera PR, including its recorder changes. Removing configuration alone
@@ -190,7 +192,7 @@ From a terminal on the robot's graphical desktop, with the hardware values expor
 uv run view-cameras
 ```
 
-One window shows **left | top (RealSense) | right** side by side using the configured rates.
+One window shows **left | top | right** side by side using the configured rates.
 The views keep their original aspect ratios. Press **Q**, **Esc**, or close the window to quit.
 Stop other camera programs first. A headless terminal fails before opening the cameras.
 
@@ -239,10 +241,10 @@ Startup failure may leave some motors enabled; maintain support. The bridge does
 not calibrate grippers. They start with zero effort until an explicit
 `gripper_target` action enables jaw position control.
 
-`observe` returns available image blocks, capture time bounds, current joints and
-temperatures, and per-device errors. Direct bridge actions do not require camera
-images. The recorder requires fresh frames from all three streams before forwarding
-motion; neither endpoint checks image brightness.
+`observe` returns available image blocks, current joints and temperatures, and
+per-device errors. Direct bridge actions do not require camera images. The recorder
+requires all three cameras to be available before forwarding task motion; neither
+endpoint checks image brightness.
 Images are not hardware-synchronized; world-to-camera calibration is absent.
 Observation does not enable motors and can run while an action is executing.
 
@@ -404,7 +406,7 @@ The additional `recording` tool takes one of these argument objects:
 {"operation":"finish"}
 ```
 
-Phase notes are logged and displayed in the video. After the task and its final
+Phase notes are logged (and displayed in the legacy overview video). After the task and its final
 observation, `finish` verifies measured neutral and refuses while an action is active.
 The agent then reviews the video and records its decision with `recording(review)`.
 The service accepts another `start` after that review; retries retain the previous
@@ -414,24 +416,28 @@ Between tasks, `observe` returns live joint feedback without camera images, and
 controller calls leave completed recordings unchanged.
 The resulting directory contains:
 
-- `rollout.mp4`: the continuous left / top / right camera video, with elapsed time
+- `rollout.mp4` (legacy backend): the continuous left / top / right camera video, with elapsed time
   and phase notes. It preserves the full run, including pauses between actions.
 - `left.mp4`, `top.mp4`, `right.mp4`: full-resolution individual camera videos at
-  their input cadence, without overlays. `manifest.json` records measured video
-  dimensions, frame rates, and duration under `native_videos`.
-- `capture.mkv`: the overview and three native-resolution video streams, retained
+  their configured resolution and cadence, without overlays. Rust allows recording
+  gaps and lists the three file paths under `native_videos` in `manifest.json`;
+  the legacy backend also includes measured video metadata.
+- `capture.mkv` (legacy backend): the overview and three native-resolution video streams, retained
   for recovery if MP4 finalization fails. Stream indices are 0=overview, 1=left,
   2=top, 3=right; select one explicitly when inspecting this container. The MP4
   files are remuxed without re-encoding.
 - `events.jsonl`: the prompt/notes, timestamped requests and responses, observations,
   and joint/velocity/gripper/temperature/health feedback sampled at a requested 5 Hz.
 - `observations/`: immutable images actually returned to the agent.
-- `manifest.json` and `ffmpeg.log`: configuration, timestamps, video metadata, and
+- `manifest.json` and capture logs (`ffmpeg.log` or `*-worker.log`): configuration, timestamps, video metadata, and
   recording errors. Check the manifest's final state before treating a run as complete.
 
-Video and event timestamps share a software wall-clock origin. Camera timestamps
-are converted by V4L2; the cameras are not hardware synchronized. Snapshot timestamps
-are file publication times, and telemetry rate is best effort. This is a record of
+The Rust backend writes the three MP4s directly, without an overview. Image requests
+wait up to two seconds for a newly delivered valid frame and return its path without
+capture metadata. It does not measure exposure age or align camera and event clocks;
+media timing stays inside the encoder. The legacy backend uses a software wall-clock
+origin and image publication timestamps.
+Cameras are not hardware synchronized, and telemetry rate is best effort. This is a record of
 what was commanded and observed, not an independent measurement of Cartesian accuracy.
 
 If recording becomes unavailable, its endpoint rejects new task motion with detailed
