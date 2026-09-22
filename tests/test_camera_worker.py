@@ -1,7 +1,6 @@
 import contextlib
 import json
 import os
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -10,24 +9,6 @@ import pytest
 from PIL import Image
 
 from agentic_robots.camera_worker import CameraWorker
-
-
-@pytest.fixture(scope="session")
-def rust_binary():
-    cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
-    subprocess.run(
-        [
-            cargo,
-            "build",
-            "--release",
-            "--locked",
-            "--manifest-path",
-            "rust/camera-service/Cargo.toml",
-        ],
-        check=True,
-        timeout=180,
-    )
-    return str(Path("rust/camera-service/target/release/robot-camera-service").resolve())
 
 
 @pytest.fixture

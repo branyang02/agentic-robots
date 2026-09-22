@@ -1,110 +1,22 @@
-"""Capture task video and tool events while forwarding actions to a separate controller."""
+"""Record camera video and tool events while forwarding actions to a separate controller."""
 
 import asyncio
 import json
-import os
-import signal
-import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mcp import Client
-from PIL import Image
 
 from agentic_robots.bridge import RobotError, failure, json_ready, write_result
-from agentic_robots.cameras import auto_exposure, configured_cameras, input_args
+from agentic_robots.camera_worker import CameraWorker
+from agentic_robots.cameras import auto_exposure, configured_cameras
 from agentic_robots.feedback import ActionFeedback
 from agentic_robots.task import TERMINAL, Review, control_unavailable, neutral_feedback
 
 ORDER = ("left", "top", "right")
-
-
-def capture_command(cameras, output, epoch):
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "warning",
-        "-nostdin",
-        "-y",
-        "-copyts",
-        "-filter_complex_threads",
-        "1",
-    ]
-    filters = []
-    for i, role in enumerate(ORDER):
-        camera = cameras[role]
-        if camera["format"] == "lavfi":  # Synthetic inputs for tests; never open V4L2.
-            command += ["-re", "-f", "lavfi", "-i", camera["device"]]
-            origin = "STARTPTS"
-        else:
-            command += ["-thread_queue_size", "64", "-timestamps", "abs", *input_args(camera)]
-            origin = f"{epoch:.6f}/TB"
-        filters += [
-            # Only the overview is resized; native videos also retain input cadence.
-            f"[{i}:v]setpts=PTS-{origin},setsar=1,split=3[v{i}][p{i}][native{i}]",
-            f"[v{i}]scale=640:480:force_original_aspect_ratio=decrease,"
-            "pad=640:480:(ow-iw)/2:(oh-ih)/2,"
-            f"drawtext=text='{role.upper()}':x=12:y=10:fontsize=24:fontcolor=white:"
-            f"box=1:boxcolor=black@0.65[panel{i}]",
-            f"[p{i}]fps=5[preview{i}]",
-        ]
-    filters += [
-        "[panel0][panel1][panel2]hstack=inputs=3:shortest=1,fps=30,"
-        "pad=iw:ih+36:0:0,"
-        "drawtext=text='t=%{pts\\:hms}':x=12:y=h-28:fontsize=20:fontcolor=white,"
-        "drawtext=textfile=phase.txt:reload=1:expansion=none:"
-        "x=260:y=h-28:fontsize=20:fontcolor=white[video]"
-    ]
-    command += ["-filter_complex", ";".join(filters), "-map", "[video]"]
-    for i in range(len(ORDER)):
-        command += ["-map", f"[native{i}]"]
-    command += [
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-crf",
-        "18",
-        "-crf:v:0",
-        "23",
-        "-threads",
-        "2",
-        "-pix_fmt",
-        "yuv420p",
-        "-fps_mode",
-        "passthrough",
-        "-flush_packets",
-        "1",
-    ]
-    # V4L2 timestamps include sub-frame jitter. A 1/FPS encoder timebase can round
-    # consecutive input frames onto the same PTS even with passthrough enabled.
-    for i in range(1, len(ORDER) + 1):
-        command += [f"-enc_time_base:v:{i}", "1:1000000"]
-    for i, name in enumerate(("overview", *ORDER)):
-        command += [f"-metadata:s:v:{i}", f"title={name}"]
-    command += [str(output / "capture.mkv")]
-    for i, role in enumerate(ORDER):
-        command += [
-            "-map",
-            f"[preview{i}]",
-            "-c:v",
-            "png",
-            "-threads",
-            "1",
-            "-compression_level",
-            "1",
-            "-f",
-            "image2",
-            "-update",
-            "1",
-            "-atomic_writing",
-            "1",
-            str(output / f"{role}.png"),
-        ]
-    return command
 
 
 def upstream_call(url, tool, arguments):
@@ -126,7 +38,8 @@ class Rollout:
         self.upstream, self.cameras = upstream, cameras
         self.epoch, self.started = time.time(), time.monotonic()
         self.state, self.error = "starting", None
-        self.process = self.capture_log = None
+        self.workers = {}
+        self.worker_status = {}
         self.lock, self.activity = threading.Lock(), threading.Lock()
         self.in_flight = 0
         self.stop_poll = threading.Event()
@@ -139,9 +52,6 @@ class Rollout:
             "camera_order": ORDER,
             "cameras": cameras,
             "telemetry_requested_hz": 5,
-            "timestamps": "Video t and event elapsed_s use the same software wall-clock origin. "
-            "Camera timestamps are converted by V4L2; cameras are not hardware synchronized. "
-            "Snapshot timestamps are file publication times, not sensor exposure times.",
         }
         (self.output / "prompt.txt").write_text(prompt + "\n")
         self.note(prompt)
@@ -174,41 +84,48 @@ class Rollout:
 
     def note(self, text):
         self.event("note", text=text)
-        temporary = self.output / f"phase-{uuid.uuid4().hex}.tmp"
-        temporary.write_text(" ".join(text.split())[:150])
-        temporary.replace(self.output / "phase.txt")
+
+    def _parallel(self, function):
+        def one(item):
+            role, worker = item
+            try:
+                return role, function(worker), None
+            except Exception as exc:
+                return role, None, str(exc)
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            return list(pool.map(one, tuple(self.workers.items())))
 
     def start(self):
         try:
             devices = [
                 str(Path(c["device"]).resolve())
                 for c in self.cameras.values()
-                if c["format"] != "lavfi"
+                if c["format"] != "synthetic"
             ]
-            if len(set(devices)) != len(devices):
-                raise ValueError("Each camera role must use a different device")
-            for camera in self.cameras.values():
+            if len(devices) != len(set(devices)):
+                raise ValueError("Each camera must use a different device")
+            for role in ORDER:
+                camera = self.cameras[role]
                 if camera["format"] == "mjpeg":
                     auto_exposure(camera)
-            self.capture_log = (self.output / "ffmpeg.log").open("w")
-            self.process = subprocess.Popen(
-                capture_command(self.cameras, self.output, self.epoch),
-                cwd=self.output,
-                stdout=subprocess.DEVNULL,
-                stderr=self.capture_log,
-                start_new_session=True,
-            )
+                self.workers[role] = CameraWorker(role, camera, self.output)
+            starts = self._parallel(lambda w: w.start(test=self.cameras[w.role].get("test")))
+            errors = {role: error for role, _, error in starts if error}
+            if errors:
+                raise RuntimeError(f"Camera startup failed: {errors}")
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                if self.process.poll() is not None:
-                    raise RuntimeError("Camera capture exited; inspect ffmpeg.log")
-                if all((self.output / f"{role}.png").exists() for role in ORDER):
+                status = self.status()
+                if status["errors"]:
+                    raise RuntimeError(f"Camera startup failed: {status['errors']}")
+                if all(s.get("ready") for s in self.worker_status.values()):
                     break
-                time.sleep(0.05)
+                time.sleep(0.02)
             else:
-                raise RuntimeError("Timed out waiting for all three camera streams")
+                raise TimeoutError("Timed out waiting for cameras")
             self.state = "recording"
-            self.event("recording_started", ffmpeg_pid=self.process.pid)
+            self.event("recording_started")
             self.save_manifest()
             self.poll_thread = threading.Thread(target=self.poll, daemon=True)
             self.poll_thread.start()
@@ -231,152 +148,76 @@ class Rollout:
             self.stop_poll.wait(max(0, 0.2 - (time.monotonic() - start)))
 
     def status(self):
-        ages = {}
-        for role in ORDER:
-            path = self.output / f"{role}.png"
-            ages[role] = time.time() - path.stat().st_mtime if path.exists() else None
-        alive = self.process is not None and self.process.poll() is None
+        if self.state in {"starting", "recording"}:
+            self.worker_status = {
+                role: result if error is None else {"capture_error": error, "ready": False}
+                for role, result, error in self._parallel(lambda w: w.call("status"))
+            }
+        errors = {
+            role: s.get("capture_error") or s.get("recording_error")
+            for role, s in self.worker_status.items()
+            if s.get("capture_error") or s.get("recording_error")
+        }
         return {
             "status": self.state,
             "output": str(self.output),
             "error": self.error,
-            "capture_alive": alive,
-            "preview_age_s": ages,
+            "errors": errors,
+            "videos": self.manifest.get("native_videos", {}),
             "in_flight": self.in_flight,
             "task": dict(self.manifest["task"]),
+            # Encoder failure does not prevent requesting images or returning the arms.
             "ready": self.state == "recording"
-            and alive
             and self.error is None
-            and all(age is not None and 0 <= age < 2 for age in ages.values()),
+            and len(self.worker_status) == 3
+            and all(s.get("ready") for s in self.worker_status.values()),
         }
 
-    def snapshots(self, after=None):
-        with self.activity:  # Finish must wait for any snapshot files being published.
+    def snapshots(self):
+        with self.activity:
             if self.state != "recording":
                 return {}, {"recording": "Start recording for images"}
-            images, errors = {}, {}
-            # Publication timestamps are software timestamps, not sensor exposure times.
-            # For action responses, never silently substitute a pre-action preview.
-            deadline = time.monotonic() + 2
-            if after is not None:
-                while time.monotonic() < deadline:
-                    if all(
-                        (self.output / f"{role}.png").exists()
-                        and (self.output / f"{role}.png").stat().st_mtime >= after
-                        for role in ORDER
-                    ):
-                        break
-                    if self.process is None or self.process.poll() is not None:
-                        break
-                    time.sleep(0.02)
             directory = self.output / "observations" / uuid.uuid4().hex
             directory.mkdir(parents=True)
-            for role in ORDER:
-                try:
-                    # Open pins the inode while FFmpeg atomically publishes the next frame.
-                    with (self.output / f"{role}.png").open("rb") as source:
-                        published = os.fstat(source.fileno()).st_mtime
-                        if after is not None and (
-                            published < after or not 0 <= time.time() - published < 2
-                        ):
-                            raise ValueError("No fresh frame published after action response")
-                        path = directory / f"{role}.png"
-                        path.write_bytes(source.read())
-                    with Image.open(path) as frame:
-                        frame.load()
-                        images[role] = {
-                            "path": str(path),
-                            "width": frame.width,
-                            "height": frame.height,
-                            "published_unix": published,
-                            "age_s": time.time() - published,
-                        }
-                except (OSError, ValueError) as exc:
-                    errors[f"camera:{role}"] = str(exc)
+            images, errors = {}, {}
+            for role, result, error in self._parallel(lambda w: w.snapshot(directory)):
+                if error:
+                    errors[f"camera:{role}"] = error
+                else:
+                    images[role] = result
             return images, errors
 
     def finish(self):
         with self.activity:
             if self.in_flight:
-                return failure(
-                    RobotError(
-                        "actions_in_flight", "Wait for active actions before finishing recording"
-                    )
-                )
+                return failure(RobotError("actions_in_flight", "Wait for active actions"))
             if self.state in {"finished", "finishing", "failed"}:
                 return self.status()
-            if self.state == "recording" and self.process.poll() is not None:
-                self.error = self.error or "Camera capture ended before finish was requested"
             self.state = "finishing"
         self.stop_poll.set()
         if self.poll_thread:
             self.poll_thread.join(timeout=5)
-        if self.process and self.process.poll() is None:
-            self.process.send_signal(signal.SIGINT)  # Only our camera encoder, never the robot.
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-                self.error = "Camera encoder needed forced termination; video may be incomplete"
-        if self.capture_log:
-            self.capture_log.close()
-        try:
-            if not self.process or self.process.returncode not in (0, 255):
-                raise RuntimeError("Camera capture failed; inspect ffmpeg.log")
-            self.manifest["native_videos"] = {}
-            for i, name in enumerate(("rollout", *ORDER)):
-                path = self.output / f"{name}.mp4"
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-hide_banner",
-                        "-loglevel",
-                        "error",
-                        "-nostdin",
-                        "-y",
-                        "-copyts",
-                        "-i",
-                        str(self.output / "capture.mkv"),
-                        "-map",
-                        f"0:v:{i}",
-                        "-c",
-                        "copy",
-                        "-movflags",
-                        "+faststart",
-                        str(path),
-                    ],
-                    check=True,
-                    capture_output=True,
-                    timeout=60,
-                )
-                probe = subprocess.run(
-                    [
-                        "ffprobe",
-                        "-v",
-                        "error",
-                        "-show_format",
-                        "-show_streams",
-                        "-of",
-                        "json",
-                        str(path),
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                )
-                metadata = json.loads(probe.stdout)
-                if name == "rollout":
-                    self.manifest["video"] = metadata
-                else:
-                    self.manifest["native_videos"][name] = metadata
-            self.state = "failed" if self.error else "finished"
-        except Exception as exc:
-            self.state, self.error = "failed", str(exc)
-        self.manifest["finished_unix"] = time.time()
-        self.event("recording_finished", state=self.state, error=self.error)
+        videos, errors = {}, {}
+        for role, result, error in self._parallel(lambda w: w.close()):
+            error = (
+                error
+                or (result or {}).get("capture_error")
+                or (result or {}).get("recording_error")
+            )
+            path = self.output / f"{role}.mp4"
+            if path.exists() and path.stat().st_size:
+                videos[role] = str(path)
+            else:
+                error = error or "Video file missing or empty"
+            if error:
+                errors[role] = error
+        self.manifest["native_videos"] = videos
+        if errors:
+            self.error = self.error or f"Camera recording failed: {errors}"
+        self.state = "failed" if self.error else "finished"
+        self.manifest.update(duration_s=time.time() - self.epoch, stopped_unix=time.time())
         self.save_manifest()
+        self.event("recording_finished", state=self.state, error=self.error)
         return self.status()
 
 
@@ -388,7 +229,6 @@ class RecordingBridge:
         output_root=Path("outputs/rollouts"),
         cameras=None,
         upstream="http://127.0.0.1:8767/mcp",
-        camera_backend="ffmpeg",
     ):
         self.rollout = rollout
         self.output_root = Path(output_root).resolve()
@@ -398,9 +238,6 @@ class RecordingBridge:
         self.binding = None
         self.watch_error = None
         self.action_feedback = ActionFeedback()
-        if camera_backend not in {"ffmpeg", "rust"}:
-            raise ValueError("camera_backend must be ffmpeg or rust")
-        self.camera_backend = camera_backend
 
     def status(self):
         result = self.rollout.status() if self.rollout else {"status": "idle", "ready": False}
@@ -441,12 +278,7 @@ class RecordingBridge:
                 output = self.output_root / (
                     time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
                 )
-                rollout_type = Rollout
-                if self.camera_backend == "rust":
-                    from agentic_robots.rust_recording import RustRollout
-
-                    rollout_type = RustRollout
-                self.rollout = rollout_type(output, text, self.cameras(), self.upstream)
+                self.rollout = Rollout(output, text, self.cameras(), self.upstream)
                 if r and task["phase"] == "retry":
                     self.rollout.manifest["task"].update(
                         previous_attempt=str(r.output), correction=task["review"]["correction"]
@@ -606,13 +438,10 @@ class RecordingBridge:
                 r.in_flight += 1  # Finish also waits for this action's observation.
         try:
             result = self._execute(action)
-            completed = time.time()
             try:
-                observation = self.observe(after=completed)
+                observation = self.observe()
             except Exception as exc:
                 observation = {"images": {}, "arms": {}, "errors": {"observation": str(exc)}}
-            if self.camera_backend == "ffmpeg":
-                observation["action_response_unix"] = completed
             try:
                 result = self.action_feedback.enrich(observation, action, result)
             except Exception as exc:
@@ -689,15 +518,14 @@ class RecordingBridge:
             ),
         )
 
-    def observe(self, after=None):
-        start = time.time()
+    def observe(self):
         r = self.rollout
         # Obtain potentially slow feedback/status before requesting the newest images.
         state = self.forward("session", {"operation": "status"})
         recording = self.status()
         try:
             images, errors = (
-                r.snapshots(after=after) if r else ({}, {"recording": "Start recording for images"})
+                r.snapshots() if r else ({}, {"recording": "Start recording for images"})
             )
         except Exception as exc:
             images, errors = {}, {"cameras": str(exc)}
@@ -711,8 +539,6 @@ class RecordingBridge:
         }
         if "error" in state:
             observation["errors"]["controller"] = state["error"]
-        if self.camera_backend == "ffmpeg":
-            observation.update(capture_started_unix=start, capture_finished_unix=time.time())
         if r:
             try:
                 r.event("observation", observation=observation)

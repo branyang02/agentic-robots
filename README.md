@@ -4,11 +4,12 @@ Setup for a dual-YAM robot: CAN, two ultrawide cameras, and a RealSense D435 RGB
 Includes an observation/action bridge for Codex. The agent is the Codex conversation.
 
 To run an autonomous task with camera observations, numerical actions, feedback
-corrections, and a complete video, follow [Run an agentic task](docs/agentic-runs.md).
+corrections, and recorded videos, follow [Run an agentic task](docs/agentic-runs.md).
 
 Python 3.11, uv, Ruff, pytest. Hardware uses i2rt pinned to
 `7ed46f4e4e316133a0c39aa6cf34a73d2718e850`; MCP exposes tools to the agent.
-Camera tools use FFmpeg and V4L2.
+Rollout cameras use Rust workers with V4L2 and GStreamer. Standalone setup/viewing
+tools and saved-video inspection use FFmpeg.
 
 ## Project layout
 
@@ -16,6 +17,7 @@ Camera tools use FFmpeg and V4L2.
 scripts/                  # Runnable programs: Args, main, workflow, and service lifecycle
 src/agentic_robots/        # Reusable control, hardware, camera, recording, and transport code
   robot_agent.md          # Canonical agent instructions, included in the installed package
+rust/camera-service/      # Native camera capture, MP4 recording, and requested images
 tests/                    # Unit, integration, and opt-in Codex tests
 ```
 
@@ -26,13 +28,17 @@ owns prompt delivery and acknowledgment; the library provides the desktop transp
 
 ## Install (Ubuntu)
 
-Run from this repository:
+Install Rust with the [official rustup installer](https://rust-lang.org/tools/install/),
+then run from this repository:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential git linux-libc-dev pkg-config python3-dev ffmpeg v4l-utils
+sudo apt-get install -y build-essential git linux-libc-dev pkg-config python3-dev ffmpeg v4l-utils \
+  libclang-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly
 curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+cargo build --release --locked --manifest-path rust/camera-service/Cargo.toml
 uv sync --locked
 uv run ruff check .
 uv run pytest
@@ -114,9 +120,9 @@ and host; inspect them with `v4l2-ctl -d /dev/v4l/by-path/ACTUAL_CAMERA_PATH --l
 pipeline; a capture-only rate check does not establish that native encoding can keep up.
 `setup-cameras list` uses discovery defaults; `preview` and `check` use your settings.
 
-The experimental [Rust camera backend](docs/rust-cameras.md) records three separate
-videos and creates images only on request. It has its own build and validation steps;
-the default remains the existing FFmpeg backend during validation.
+The [Rust camera service](docs/rust-cameras.md) is the only rollout camera backend.
+It records three native-resolution videos and returns full-resolution images on
+request. Build the worker during installation; `robot-record` uses it automatically.
 
 Run the [camera checks](#check-cameras) below. Existing services must then be
 restarted to load the changed code and environment; follow the
@@ -160,10 +166,9 @@ and saves `outputs/report.json`. It requires each measured frame rate to be with
 
 Snapshots and agent observations retain the configured camera resolution as PNGs.
 Each recording saves `left.mp4`, `top.mp4`, and `right.mp4` at the configured
-resolution and actual input frame cadence. The legacy FFmpeg backend also creates
-a scaled three-panel overview; the Rust backend records only the separate views.
+resolution and actual input frame cadence. Create combined views afterward.
 The live viewer scales its display independently of recording.
-These use H.264 (legacy CRF 18; Rust constant quantizer 18), with no resizing or frame-rate
+These use H.264 (constant quantizer 18), with no resizing or frame-rate
 upsampling; they add CPU and disk usage. Higher-resolution observations also
 increase image payload sizes for model requests.
 
@@ -264,10 +269,11 @@ images and measured arm feedback, each arm's `ee_pose` (FK at `grasp_site`, metr
 and XYZW quaternion in its own base frame), `gripper` state, and concise `diagnostics`.
 Jaw-action state distinguishes requested from measured opening and flags interruption;
 it does not infer grasp success. Native MCP includes image blocks; `robot-call` JSON
-contains absolute image paths. The recorder waits up to two seconds for frames
-published after execution; stale/missing evidence is reported in `post_action.errors`
-without replacing the original completed/rejected/stopped outcome. Publication
-timestamps are not sensor exposure timestamps. Additional `observe` and session
+contains absolute image paths. After execution and a measured-feedback check,
+the recorder requests newly delivered camera frames with a two-second deadline.
+Missing evidence is reported in `post_action.errors` without replacing the original
+completed/rejected/stopped outcome. Device buffering can still add delay; no sensor
+exposure-age bound is claimed. Additional `observe` and session
 status requests remain available. The internal motor bridge stays numeric and does
 not access cameras on execute, so it cannot compete with the recorder for streams.
 Units are metres/radians. EE targets require base-frame `position_m` and
@@ -406,8 +412,7 @@ The additional `recording` tool takes one of these argument objects:
 {"operation":"finish"}
 ```
 
-Phase notes are logged (and displayed in the legacy overview video). After the task and its final
-observation, `finish` verifies measured neutral and refuses while an action is active.
+Phase notes are saved in the event log. After the task and its final observation, `finish` verifies measured neutral and refuses while an action is active.
 The agent then reviews the video and records its decision with `recording(review)`.
 The service accepts another `start` after that review; retries retain the previous
 attempt's path and correction. See [the run guide](docs/agentic-runs.md) for the
@@ -416,27 +421,20 @@ Between tasks, `observe` returns live joint feedback without camera images, and
 controller calls leave completed recordings unchanged.
 The resulting directory contains:
 
-- `rollout.mp4` (legacy backend): the continuous left / top / right camera video, with elapsed time
-  and phase notes. It preserves the full run, including pauses between actions.
-- `left.mp4`, `top.mp4`, `right.mp4`: full-resolution individual camera videos at
-  their configured resolution and cadence, without overlays. Rust allows recording
-  gaps and lists the three file paths under `native_videos` in `manifest.json`;
-  the legacy backend also includes measured video metadata.
-- `capture.mkv` (legacy backend): the overview and three native-resolution video streams, retained
-  for recovery if MP4 finalization fails. Stream indices are 0=overview, 1=left,
-  2=top, 3=right; select one explicitly when inspecting this container. The MP4
-  files are remuxed without re-encoding.
-- `events.jsonl`: the prompt/notes, timestamped requests and responses, observations,
-  and joint/velocity/gripper/temperature/health feedback sampled at a requested 5 Hz.
-- `observations/`: immutable images actually returned to the agent.
-- `manifest.json` and capture logs (`ffmpeg.log` or `*-worker.log`): configuration, timestamps, video metadata, and
-  recording errors. Check the manifest's final state before treating a run as complete.
+- `left.mp4`, `top.mp4`, `right.mp4`: separate native-resolution camera videos at
+  their configured cadence, without overlays. Dropped frames are acceptable.
+  `manifest.json` lists the file paths under `native_videos`.
+- `events.jsonl`: prompt/notes, tool requests and responses, observations, and
+  joint/velocity/gripper/temperature/health feedback sampled at a requested 5 Hz.
+- `observations/`: immutable full-resolution images returned to the agent.
+- `manifest.json` and `*-worker.log`: task status, camera configuration, video paths,
+  and recording errors. Check the manifest's final state before treating a run as complete.
 
-The Rust backend writes the three MP4s directly, without an overview. Image requests
-wait up to two seconds for a newly delivered valid frame and return its path without
-capture metadata. It does not measure exposure age or align camera and event clocks;
-media timing stays inside the encoder. The legacy backend uses a software wall-clock
-origin and image publication timestamps.
+Each camera has its own Rust worker, which keeps the latest frame in RAM, records
+an MP4 continuously during the rollout, and creates PNGs only when requested.
+Image requests wait up to two seconds for a newly delivered valid frame and return
+its path without capture metadata. The service does not measure exposure age or
+align camera and event clocks; media timing stays inside the encoder.
 Cameras are not hardware synchronized, and telemetry rate is best effort. This is a record of
 what was commanded and observed, not an independent measurement of Cartesian accuracy.
 
@@ -451,6 +449,10 @@ stopping the recorder leaves the independent motor bridge and its holds running.
 ## Development checks
 
 ```bash
+cargo fmt --manifest-path rust/camera-service/Cargo.toml --check
+cargo check --locked --all-targets --manifest-path rust/camera-service/Cargo.toml
+cargo clippy --locked --all-targets --manifest-path rust/camera-service/Cargo.toml -- -D warnings
+cargo test --locked --manifest-path rust/camera-service/Cargo.toml
 uv run ruff format .
 uv run ruff check .
 uv run pytest
@@ -458,8 +460,8 @@ uv run pytest
 
 Tests cover observation failures, all action kinds, geometry, execution and fault
 feedback, hardware ownership, MCP, and a complete HTTP/CLI loop with simulated arms.
-Recording tests use synthetic FFmpeg streams and simulated HTTP robot hardware;
-they verify video decoding, camera layout, immutable observations, event logging,
+Recording tests use Rust workers with synthetic frames and simulated HTTP robot hardware;
+they verify video decoding, native dimensions, immutable observations, event logging,
 transport/capture/log-write failures, and preservation of hold after recorder shutdown.
 HTTP test servers explicitly forbid CAN sockets. These validate software behavior,
 not physical dynamics or task success on the real robot.

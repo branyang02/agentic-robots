@@ -1,4 +1,4 @@
-# Rust RGB camera service (experimental)
+# Rust RGB camera service
 
 One Rust process owns each camera. It keeps the latest source frame in memory and
 records `left.mp4`, `top.mp4`, or `right.mp4` continuously at the configured mode.
@@ -41,7 +41,7 @@ or save those quoted values without `export` in `.env`. Stop other camera consum
 then start a new recorder connected to the existing motor endpoint:
 
 ```bash
-uv run --env-file .env robot-record --camera-backend rust \
+uv run --env-file .env robot-record \
   --upstream http://127.0.0.1:8767/mcp --port 8768 --output-root outputs/rollouts
 ```
 
@@ -103,7 +103,7 @@ protocol details. Agents keep using `observe` and `execute` and may ask for more
 images whenever needed. The camera service never resets CAN, releases torque, or
 restarts a motor controller.
 
-## Validate and roll back
+## Validate
 
 ```bash
 cargo fmt --manifest-path rust/camera-service/Cargo.toml --check
@@ -121,9 +121,11 @@ HTTP, CLI, MCP images, concurrent actions, failure injection, and repeated rollo
 They do not validate physical dynamics. Real-camera acceptance is described in the
 [migration plan](camera-service-plan.md) and must be reported separately.
 
-The default remains `ffmpeg`. To roll back, finish the active recording, stop only
-the recorder, and restart it with `--camera-backend ffmpeg` (or omit the option).
-Both backends accept the same new camera JSON. The motor controller is unaffected.
+Rust is the only rollout backend; `robot-record` has no `--camera-backend` option.
+Build the worker before starting the service. Missing workers produce an explicit
+startup error. The motor controller remains a separate process. Standalone setup
+and live-view utilities still use FFmpeg; recorded media can also be inspected or
+composed with FFmpeg afterward.
 
 Implementation references: [Cargo binaries](https://doc.rust-lang.org/cargo/commands/cargo-new.html),
 [Python subprocess](https://docs.python.org/3/library/subprocess.html),

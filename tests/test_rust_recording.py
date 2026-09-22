@@ -11,25 +11,11 @@ import pytest
 from mcp import Client
 from PIL import Image
 
-from agentic_robots.recording import RecordingBridge
-from agentic_robots.rust_recording import RustRollout
-from tests.test_camera_worker import frame_number, probe, rust_binary  # noqa: F401
+from agentic_robots.recording import RecordingBridge, Rollout
+from tests.test_camera_worker import frame_number, probe  # noqa: F401
 from tests.test_robot_http import http_robot  # noqa: F401
+from tests.test_robot_record import cameras
 from tests.test_robot_record_service import http_recorder  # noqa: F401
-
-
-def cameras():
-    return {
-        role: dict(
-            device="synthetic",
-            format="synthetic",
-            width=320,
-            height=240,
-            fps=10,
-            test=dict(color=color),
-        )
-        for role, color in zip(("left", "top", "right"), ([255, 0, 0], [0, 255, 0], [0, 0, 255]))
-    }
 
 
 def test_partial_worker_failure_and_startup_cleanup(tmp_path, monkeypatch, rust_binary):  # noqa: F811
@@ -37,7 +23,7 @@ def test_partial_worker_failure_and_startup_cleanup(tmp_path, monkeypatch, rust_
     monkeypatch.setenv("ROBOT_CAMERA_TEST_ONLY", "1")
     monkeypatch.setattr("agentic_robots.recording.upstream_call", Mock(return_value={"arms": {}}))
     config = cameras()
-    rollout = RustRollout(tmp_path / "partial", "test", config, "unused")
+    rollout = Rollout(tmp_path / "partial", "test", config, "unused")
     rollout.start()
     worker = rollout.workers["top"]
     worker.process.kill()
@@ -55,7 +41,7 @@ def test_partial_worker_failure_and_startup_cleanup(tmp_path, monkeypatch, rust_
 
     bad = cameras()
     bad["top"]["width"] = 0
-    broken = RustRollout(tmp_path / "bad-start", "test", bad, "unused")
+    broken = Rollout(tmp_path / "bad-start", "test", bad, "unused")
     with pytest.raises(RuntimeError, match="startup"):
         broken.start()
     assert all(w.process.poll() is not None for w in broken.workers.values())
@@ -69,10 +55,10 @@ def test_images_are_requested_after_slow_feedback(
     monkeypatch.setenv("ROBOT_CAMERA_BINARY", rust_binary)
     monkeypatch.setenv("ROBOT_CAMERA_TEST_ONLY", "1")
     monkeypatch.setattr("agentic_robots.recording.upstream_call", Mock(return_value={"arms": {}}))
-    rollout = RustRollout(tmp_path / "slow", "test", cameras(), "unused")
+    rollout = Rollout(tmp_path / "slow", "test", cameras(), "unused")
     rollout.start()
     try:
-        bridge = RecordingBridge(rollout, camera_backend="rust")
+        bridge = RecordingBridge(rollout)
 
         markers = {}
 
@@ -96,7 +82,7 @@ def test_images_are_requested_after_slow_feedback(
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize("http_recorder", ["rust", ("rust", 250)], indirect=True)
+@pytest.mark.parametrize("http_recorder", [0, 250], indirect=True)
 def test_rust_http_cli_rollout_images_actions_review_and_repeat(http_recorder):  # noqa: F811
     call, url, output, service, controller, _ = http_recorder
     assert call("recording", {"operation": "status"})["status"] == "idle"

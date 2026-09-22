@@ -62,7 +62,8 @@ def test_finish_checks_measured_arms_and_preserves_active_attempt(attempt, probl
     assert "left" in result["error"]["details"]["problems"]
     assert bridge.status()["ready"]
     assert bridge.status()["task"]["phase"] == "active"
-    bridge.rollout.process.send_signal.assert_not_called()
+    for worker in bridge.rollout.workers.values():
+        worker.close.assert_not_called()
 
 
 def test_finish_then_review_then_retry_links_correction(attempt):
@@ -91,7 +92,7 @@ def test_return_declaration_never_moves_and_video_failure_does_not_trap_return(
     attempt, monkeypatch
 ):
     bridge, _, upstream = attempt
-    bridge.rollout.process.poll.return_value = 1
+    bridge.rollout.workers["top"].call.side_effect = RuntimeError("Camera worker exited")
     bridge.rollout.error = "encoder stopped"
     monkeypatch.setattr(bridge.rollout, "event", Mock(side_effect=OSError("disk full")))
     monkeypatch.setattr(bridge.rollout, "save_manifest", Mock(side_effect=OSError("disk full")))
@@ -216,6 +217,6 @@ def test_uncertain_continuation_is_not_resent_and_wrong_thread_is_rejected(attem
 def test_failed_capture_start_can_be_repaired_before_any_motion(attempt):
     bridge, _, upstream = attempt
     bridge.rollout.state = "failed"
-    bridge.rollout.process.poll.return_value = 1
+    bridge.rollout.workers["top"].call.side_effect = RuntimeError("Camera worker exited")
     assert bridge.recording("start", "Retry camera setup")["ready"]
     upstream.assert_not_called()

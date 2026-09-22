@@ -52,12 +52,11 @@ Stop other camera viewers, then run the recorder in a second terminal:
 uv run --env-file .env robot-record --output-root outputs/rollouts --port 8768
 ```
 
-After building the experimental [Rust camera service](rust-cameras.md), append
-`--camera-backend rust` to record separate native-resolution `left.mp4`, `top.mp4`,
-and `right.mp4` videos and return newly delivered frames on request. The agent
-tools are unchanged. Omitting the flag retains the legacy FFmpeg backend; switching
-recorders does not require restarting the motor controller. Finish the current
-recording before changing camera ownership.
+`robot-record` uses the [Rust camera service](rust-cameras.md) automatically.
+Build the worker during installation. Each rollout records separate native-resolution
+`left.mp4`, `top.mp4`, and `right.mp4` videos and returns newly delivered frames on
+request. There is no backend-selection flag. FFmpeg is used only by standalone
+setup/viewing tools and for inspecting or composing saved media.
 
 Keep both terminals running throughout the task.
 The controller starts disconnected and enables no motors until the agent starts
@@ -212,7 +211,7 @@ The recorder's additional tool accepts:
 {"operation":"note","text":"Trace the upper lobes"}
 {"operation":"return","text":"Task completed; returning both arms"}
 {"operation":"finish"}
-{"operation":"review","review":{"outcome":"success","summary":"Observed task result","evidence":["rollout.mp4 at 00:18 and final joint observation"]}}
+{"operation":"review","review":{"outcome":"success","summary":"Observed task result","evidence":["top.mp4 at 00:18 and final joint observation"]}}
 ```
 
 `start` refuses to replace an active or unreviewed attempt. `finish` checks two fresh
@@ -235,13 +234,11 @@ No recorder operation releases arm torque.
 
 Each directory contains native-resolution `left.mp4`, `top.mp4`, `right.mp4`,
 `events.jsonl`, `observations/`, `manifest.json`, `prompt.txt`, and capture logs.
-The legacy backend also writes `rollout.mp4`, `capture.mkv`, and `ffmpeg.log`; the
-Rust backend writes per-camera `*-worker.log` files. The legacy overview includes pauses between actions,
-camera labels, elapsed time, and phase notes. Native videos preserve each camera's
-input cadence without overlays or resizing. Events include tool requests/results,
-immutable observations, and telemetry. Check the final manifest before claiming a
-complete recording. Cameras are not hardware synchronized; video is not
-an independent measurement of Cartesian accuracy.
+Each camera has a `*-worker.log` file. Videos include pauses between actions and
+preserve the camera's input cadence without overlays or resizing; dropped frames
+are acceptable. Events include tool requests/results, immutable observations, and
+telemetry. Check the final manifest before claiming a complete recording. Cameras
+are not hardware synchronized; video is not an independent measurement of Cartesian accuracy.
 
 The agent should inspect the recorded movement and state whether it reviewed video
 or sampled frames. It should report uncertainty rather than infer success from a
@@ -260,7 +257,7 @@ uv run pytest
 To defer end-to-end workflows, use `uv run pytest -m 'not e2e'`.
 
 The default suite uses mocks or simulated arms and a fake desktop. HTTP subprocesses
-forbid CAN sockets; video tests use real FFmpeg and synthetic camera streams. Tests
+forbid CAN sockets; video tests use real Rust workers and synthetic camera streams. Tests
 cover initialization acknowledgment and failure, idle recording, repeated tasks,
 rejection/correction, tracking-fault recovery, neutral/review gates, an early-ended fake
 agent resuming after a return fault, persistent hold, and final MP4 generation.

@@ -40,5 +40,5 @@ lifecycle. No motion logic or video composition belongs in this module.
   videos, and check dimensions and usable duration. Report this separately from
   software tests; simulated arms do not validate physical dynamics.
 
-Keep Rust opt-in until migration is approved. No optical-latency or lossless-video
+Rust is the only rollout camera backend. No optical-latency or lossless-video
 acceptance threshold is required by this contract.

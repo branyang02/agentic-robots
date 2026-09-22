@@ -25,8 +25,6 @@ class Args:
     """Motor bridge's MCP endpoint."""
     port: int = 8768
     """Port for the recorder's MCP server."""
-    camera_backend: Literal["ffmpeg", "rust"] = "ffmpeg"
-    """Select legacy capture or isolated Rust camera workers."""
 
 
 def recording_server(bridge):
@@ -141,9 +139,7 @@ async def watch_agent(bridge, stop):
 
 def main():
     args = tyro.cli(Args, description=__doc__)
-    bridge = RecordingBridge(
-        output_root=args.output_root, upstream=args.upstream, camera_backend=args.camera_backend
-    )
+    bridge = RecordingBridge(output_root=args.output_root, upstream=args.upstream)
     stop = threading.Event()
     watcher = threading.Thread(target=lambda: asyncio.run(watch_agent(bridge, stop)), daemon=True)
     watcher.start()
