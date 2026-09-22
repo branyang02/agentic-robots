@@ -22,6 +22,8 @@ Complete the [README hardware setup](../README.md): dependencies, adapters, CAN,
 cameras, and gripper calibration. Save `ROBOT_ID`, `LEFT_CAN`, `RIGHT_CAN`,
 `LEFT_CAMERA`, `RIGHT_CAMERA`, and `TOP_CAMERA` as shell assignments in the ignored
 `.env` file. Calibration stays local in `calibration/<ROBOT_ID>.json`.
+Camera values are single-quoted JSON objects containing `type`, `path`, `width`,
+`height`, and `fps`; either camera type can serve any role. See the README examples.
 Run the following commands from the repository root on the robot computer.
 
 Inspect an existing controller first:
@@ -49,6 +51,12 @@ Stop other camera viewers, then run the recorder in a second terminal:
 ```bash
 uv run --env-file .env robot-record --output-root outputs/rollouts --port 8768
 ```
+
+`robot-record` uses the [Rust camera service](rust-cameras.md) automatically.
+Build the worker during installation. Each rollout records separate native-resolution
+`left.mp4`, `top.mp4`, and `right.mp4` videos and returns newly delivered frames on
+request. There is no backend-selection flag. FFmpeg is used only by standalone
+setup/viewing tools and for inspecting or composing saved media.
 
 Keep both terminals running throughout the task.
 The controller starts disconnected and enables no motors until the agent starts
@@ -203,7 +211,7 @@ The recorder's additional tool accepts:
 {"operation":"note","text":"Trace the upper lobes"}
 {"operation":"return","text":"Task completed; returning both arms"}
 {"operation":"finish"}
-{"operation":"review","review":{"outcome":"success","summary":"Observed task result","evidence":["rollout.mp4 at 00:18 and final joint observation"]}}
+{"operation":"review","review":{"outcome":"success","summary":"Observed task result","evidence":["top.mp4 at 00:18 and final joint observation"]}}
 ```
 
 `start` refuses to replace an active or unreviewed attempt. `finish` checks two fresh
@@ -214,7 +222,7 @@ motion limits. Rejections include measured feedback, tolerances, and per-arm rea
 and a blocked decision requires a `constraint`. Evidence is the agent's assessment;
 the harness does not independently judge the video or prove task impossibility.
 
-New task motion requires a ready recording with all three streams fresh. `return`
+New task motion requires a ready recording with all three cameras available. `return`
 declares intent without moving and permits agent-chosen return actions with best-effort
 logging if recording fails. Controller checks still apply. Status, recovery, and explicit
 controller stop remain available on logging failures. An exceptional review with outcome
@@ -224,14 +232,13 @@ accepted as unavailable control. Outcome `paused` records an explicit user stop.
 Finalizing files during process cleanup is separate from completing a task.
 No recorder operation releases arm torque.
 
-Each directory contains `rollout.mp4`, native-resolution `left.mp4`, `top.mp4`,
-`right.mp4`, `capture.mkv`, `events.jsonl`, `observations/`, `manifest.json`,
-`prompt.txt`, and `ffmpeg.log`. The overview includes pauses between actions,
-camera labels, elapsed time, and phase notes. Native videos preserve each camera's
-input cadence without overlays or resizing. Events include tool requests/results,
-immutable observations, and telemetry. Check the final manifest before claiming a
-complete recording. Camera timestamps are not hardware synchronized; video is not
-an independent measurement of Cartesian accuracy.
+Each directory contains native-resolution `left.mp4`, `top.mp4`, `right.mp4`,
+`events.jsonl`, `observations/`, `manifest.json`, `prompt.txt`, and capture logs.
+Each camera has a `*-worker.log` file. Videos include pauses between actions and
+preserve the camera's input cadence without overlays or resizing; dropped frames
+are acceptable. Events include tool requests/results, immutable observations, and
+telemetry. Check the final manifest before claiming a complete recording. Cameras
+are not hardware synchronized; video is not an independent measurement of Cartesian accuracy.
 
 The agent should inspect the recorded movement and state whether it reviewed video
 or sampled frames. It should report uncertainty rather than infer success from a
@@ -250,7 +257,7 @@ uv run pytest
 To defer end-to-end workflows, use `uv run pytest -m 'not e2e'`.
 
 The default suite uses mocks or simulated arms and a fake desktop. HTTP subprocesses
-forbid CAN sockets; video tests use real FFmpeg and synthetic camera streams. Tests
+forbid CAN sockets; video tests use real Rust workers and synthetic camera streams. Tests
 cover initialization acknowledgment and failure, idle recording, repeated tasks,
 rejection/correction, tracking-fault recovery, neutral/review gates, an early-ended fake
 agent resuming after a return fault, persistent hold, and final MP4 generation.

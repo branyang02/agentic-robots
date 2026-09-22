@@ -47,6 +47,7 @@ def test_help_and_unknown_options(main, argv, code, monkeypatch):
         (robot_record.main, ["--output-root"]),
         (robot_record.main, ["--prompt-file", "prompt.txt"]),
         (robot_record.main, ["--port", "invalid"]),
+        (robot_record.main, ["--camera-backend", "ffmpeg"]),
         (robot_init.main, []),
         (robot_init.main, ["--thread-id", "test", "--timeout-s", "invalid"]),
     ],

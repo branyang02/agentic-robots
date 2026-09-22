@@ -6,7 +6,6 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from fractions import Fraction
 from unittest.mock import Mock
 
 import pytest
@@ -16,13 +15,23 @@ from PIL import Image
 from agentic_robots.bridge import Action
 from agentic_robots.recording import ORDER, RecordingBridge, Rollout
 from scripts.robot_record import recording_server
+from tests.test_camera_worker import probe
 from tests.test_robot_http import http_robot  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("camera_runtime")
 
 
 def cameras():
     return {
-        role: {"format": "lavfi", "device": f"color=c={color}:s=640x480:r=30"}
-        for role, color in zip(ORDER, ("red", "green", "blue"))
+        role: dict(
+            device="synthetic",
+            format="synthetic",
+            width=320,
+            height=240,
+            fps=10,
+            test=dict(color=color),
+        )
+        for role, color in zip(ORDER, ([255, 0, 0], [0, 255, 0], [0, 0, 255]))
     }
 
 
@@ -43,10 +52,21 @@ def rollout(tmp_path, monkeypatch):
 
 def ready_fake(r):
     r.state = "recording"
-    r.process = Mock()
-    r.process.poll.return_value = None
     for role in ORDER:
-        Image.new("RGB", (20, 10), "red").save(r.output / f"{role}.png")
+        worker = Mock()
+        worker.call.return_value = dict(
+            ready=True, stopped=False, capture_error=None, recording_error=None
+        )
+        worker.color = "red"
+
+        def snapshot(directory, role=role, worker=worker):
+            path = directory / f"{role}.png"
+            Image.new("RGB", (20, 10), worker.color).save(path)
+            return {"path": str(path)}
+
+        worker.snapshot.side_effect = snapshot
+        r.workers[role] = worker
+    r.status()
 
 
 def events(r):
@@ -63,20 +83,20 @@ def test_concurrent_event_log_is_parseable_and_keeps_prompt(rollout):
     assert all(e["elapsed_s"] >= 0 for e in records)
 
 
-def test_observations_are_immutable_and_use_shared_frames(rollout):
+def test_observations_are_immutable_and_use_camera_workers(rollout):
     ready_fake(rollout)
     bridge = RecordingBridge(rollout)
     first = bridge.observe()
-    Image.new("RGB", (20, 10), "blue").save(rollout.output / "left.png")
+    rollout.workers["left"].color = "blue"
     second = bridge.observe()
     assert first["images"]["left"]["path"] != second["images"]["left"]["path"]
     assert Image.open(first["images"]["left"]["path"]).getpixel((0, 0)) == (255, 0, 0)
     assert Image.open(second["images"]["left"]["path"]).getpixel((0, 0)) == (0, 0, 255)
-    (rollout.output / "top.png").unlink()
+    rollout.workers["top"].snapshot.side_effect = TimeoutError("No new camera frame")
     partial = bridge.observe()
     assert "camera:top" in partial["errors"]
     assert "left" in partial["arms"]
-    assert "published_unix" in first["images"]["left"]
+    assert set(first["images"]["left"]) == {"path"}
 
 
 def test_actions_forward_unchanged_and_preserve_rejection(rollout, monkeypatch):
@@ -113,7 +133,7 @@ def test_transport_failure_is_recorded_without_automatic_retry(rollout, monkeypa
 
 def test_dead_capture_does_not_forward_actions_but_stop_still_works(rollout, monkeypatch):
     ready_fake(rollout)
-    rollout.process.poll.return_value = 1
+    rollout.workers["top"].call.side_effect = RuntimeError("Camera worker exited")
     upstream = Mock(return_value={"status": "stop requested; torque is not released"})
     monkeypatch.setattr("agentic_robots.recording.upstream_call", upstream)
     bridge = RecordingBridge(rollout)
@@ -129,7 +149,8 @@ def test_finish_during_action_preserves_capture_and_hold(rollout):
     rollout.in_flight = 1
     result = rollout.finish()
     assert result["error"]["code"] == "actions_in_flight"
-    rollout.process.send_signal.assert_not_called()
+    for worker in rollout.workers.values():
+        worker.close.assert_not_called()
     assert rollout.state == "recording"
 
 
@@ -156,7 +177,6 @@ def test_idle_recorder_uses_no_cameras_and_reports_how_to_start(tmp_path, monkey
 def test_completed_recordings_stay_unchanged_during_idle_calls(rollout, monkeypatch, state):
     ready_fake(rollout)
     rollout.state = state
-    rollout.process.poll.return_value = 0
     rollout.save_manifest()
     before = {p: p.read_bytes() for p in rollout.output.rglob("*") if p.is_file()}
     current = {"arms": {"left": {"joints_rad": [0.2, 0, 0, 0, 0, 0]}}}
@@ -279,115 +299,43 @@ def frame(path):
 
 
 @pytest.mark.parametrize("high_resolution", [False, True])
-def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout, high_resolution):
-    # Independent camera clocks do not produce identical input frame timestamps.
-    rollout.cameras["top"]["device"] = "color=c=green:s=640x480:r=29"
-    sizes = dict.fromkeys(ORDER, (640, 480))
-    rates = {"left": 30, "top": 29, "right": 30}
+def test_rust_records_native_videos_and_observations(rollout, high_resolution):
+    sizes = dict.fromkeys(ORDER, (320, 240))
     if high_resolution:
         sizes = {"left": (1920, 1200), "top": (1920, 1080), "right": (1920, 1200)}
-        rates = {"left": 5, "top": 8, "right": 5}
-        for role, color in zip(ORDER, ("red", "green", "blue")):
-            width, height = sizes[role]
-            rate = rates[role]
-            rollout.cameras[role]["device"] = f"color=c={color}:s={width}x{height}:r={rate}"
+        for role, camera in rollout.cameras.items():
+            camera.update(
+                width=sizes[role][0], height=sizes[role][1], fps=8 if role == "top" else 5
+            )
     try:
         rollout.start()
         assert rollout.status()["ready"]
-        before = (rollout.output / "top.png").stat().st_mtime
         rollout.note("Recording synthetic test streams")
         time.sleep(1)
-        assert (rollout.output / "top.png").stat().st_mtime > before
-        images, errors = rollout.snapshots(after=time.time())
+        images, errors = rollout.snapshots()
         assert not errors
         for role, size in sizes.items():
+            assert set(images[role]) == {"path"}
             with Image.open(images[role]["path"]) as observation:
                 assert observation.size == size
     finally:
         result = rollout.finish()
-    assert result["status"] == "finished", (rollout.output / "ffmpeg.log").read_text()
-    image = frame(rollout.output / "rollout.mp4")
-    assert image.size == (1920, 516)
-    for x, channel in [(320, 0), (960, 1), (1600, 2)]:
-        pixel = image.getpixel((x, 240))
-        assert pixel[channel] > 100
-        assert all(value < 10 for i, value in enumerate(pixel) if i != channel)
+    assert result["status"] == "finished", result
     assert any(e["kind"] == "telemetry" for e in events(rollout))
-    assert float(rollout.manifest["video"]["format"]["duration"]) > 1
+    assert not (rollout.output / "capture.mkv").exists()
+    assert not (rollout.output / "rollout.mp4").exists()
+    assert not list(rollout.output.glob("*.png"))
     for channel, role in enumerate(ORDER):
-        native = frame(rollout.output / f"{role}.mp4")
+        path = rollout.output / f"{role}.mp4"
+        native = frame(path)
         assert native.size == sizes[role]
         assert native.getpixel((native.width // 2, native.height // 2))[channel] > 100
-        metadata = rollout.manifest["native_videos"][role]
-        stream = metadata["streams"][0]
+        assert rollout.manifest["native_videos"][role] == str(path)
+        stream = probe(path)["streams"][0]
         assert (stream["width"], stream["height"]) == sizes[role]
-        assert float(Fraction(stream["avg_frame_rate"])) == pytest.approx(rates[role], rel=0.01)
-        assert float(metadata["format"]["duration"]) > 1
-        # Native streams retain their final frames after the overview's shortest
-        # input ends; allow up to three frames when the source cadence is slow.
-        assert abs(
-            float(metadata["format"]["duration"])
-            - float(rollout.manifest["video"]["format"]["duration"])
-        ) < max(0.5, 3 / rates[role])
-    packets = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "packet=pts_time",
-            "-of",
-            "csv=p=0",
-            str(rollout.output / "rollout.mp4"),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    times = [float(line) for line in packets.stdout.splitlines()]
-    # Matroska stores millisecond timecodes: a 30 fps cadence alternates 33/34 ms.
-    assert all(b - a == pytest.approx(1 / 30, abs=0.001) for a, b in zip(times, times[1:]))
+        assert float(stream["duration"]) >= 1
+        assert int(stream["nb_read_frames"]) > 0
     assert rollout.finish()["status"] == "finished"
-
-
-def test_native_video_preserves_irregular_camera_timestamps(rollout):
-    # Alternating 40 ms delay keeps input PTS ordered but would create duplicate
-    # native timestamps if the encoder rounded every frame to a 1/15 s timebase.
-    rollout.cameras["right"]["device"] = (
-        "color=c=blue:s=640x480:r=15,settb=1/1000000,setpts=PTS+40000*mod(N\\,2)"
-    )
-    try:
-        rollout.start()
-        time.sleep(1)
-    finally:
-        result = rollout.finish()
-    assert result["status"] == "finished"
-    assert "non-strictly-monotonic PTS" not in (rollout.output / "ffmpeg.log").read_text()
-    probe = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "packet=pts_time",
-            "-of",
-            "csv=p=0",
-            str(rollout.output / "right.mp4"),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    times = [float(line) for line in probe.stdout.splitlines()]
-    intervals = [b - a for a, b in zip(times, times[1:])]
-    assert len(intervals) >= 10
-    assert all(d > 0 for d in intervals)
-    assert min(intervals) == pytest.approx(1 / 15 - 0.04, abs=0.001)
-    assert max(intervals) == pytest.approx(1 / 15 + 0.04, abs=0.001)
 
 
 @pytest.mark.e2e
@@ -450,19 +398,20 @@ def test_mcp_recorded_rollout_against_http_robot_preserves_hold(http_robot, tmp_
         log = events(r)
         assert sum(e["kind"] == "request" and e["tool"] == "execute" for e in log) == 7
         assert not any(e.get("arguments", {}).get("operation") == "release" for e in log)
-        assert frame(r.output / "rollout.mp4").size == (1920, 516)
+        assert all(frame(r.output / f"{role}.mp4").size == (320, 240) for role in ORDER)
     finally:
         r.finish()
 
 
-def test_unexpected_encoder_exit_is_reported_as_failed(rollout):
+def test_unexpected_worker_exit_is_reported_as_failed(rollout):
     rollout.start()
-    rollout.process.send_signal(__import__("signal").SIGINT)
-    rollout.process.wait(timeout=10)
+    worker = rollout.workers["top"]
+    worker.process.kill()
+    worker.process.wait(timeout=10)
     assert not rollout.status()["ready"]
     result = rollout.finish()
     assert result["status"] == "failed"
-    assert "before finish" in result["error"]
+    assert "top" in result["error"]
 
 
 @pytest.mark.e2e
@@ -551,7 +500,7 @@ def test_http_cli_recorder_shutdown_does_not_stop_controller(http_robot, tmp_pat
         proc.wait(timeout=10)
         assert controller.poll() is None
         assert call("session", {"operation": "status"})["arms"]["left"]["joints_rad"][0] == 0.1
-        assert frame(output / "rollout.mp4").size == (1920, 516)
+        assert all(frame(output / f"{role}.mp4").size == (320, 240) for role in ORDER)
     finally:
         if proc.poll() is None:
             proc.terminate()

@@ -1,4 +1,4 @@
-"""Persistent recorder over real HTTP, FFmpeg, and simulated CAN-free hardware."""
+"""Persistent recorder over real HTTP, Rust cameras, and simulated CAN-free hardware."""
 
 import asyncio
 import json
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture
-def http_recorder(http_robot, tmp_path):  # noqa: F811
+def http_recorder(http_robot, tmp_path, request, camera_runtime):  # noqa: F811
     _, command, controller, root = http_robot
     cmd, _ = command("session", {"operation": "status"})
     upstream = cmd[cmd.index("--url") + 1]
@@ -28,6 +28,11 @@ def http_recorder(http_robot, tmp_path):  # noqa: F811
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     output = tmp_path / "tasks"
+    encoder_delay_ms = getattr(request, "param", 0)
+    camera_config = cameras()
+    for camera in camera_config.values():
+        camera["test"]["encoder_delay_ms"] = encoder_delay_ms
+    environment = {**os.environ, "PYTHONPATH": str(root)}
     program = tmp_path / "recorder_service.py"
     program.write_text(
         "import socket\noriginal=socket.socket\n"
@@ -38,7 +43,7 @@ def http_recorder(http_robot, tmp_path):  # noqa: F811
         "socket.socket=NoCAN\n"
         "from agentic_robots import recording\n"
         "from scripts import robot_record\n"
-        f"recording.configured_cameras=lambda:{cameras()!r}\n"
+        f"recording.configured_cameras=lambda:{camera_config!r}\n"
         "robot_record.main()\n"
     )
     log = (tmp_path / "recorder-service.log").open("w")
@@ -54,7 +59,7 @@ def http_recorder(http_robot, tmp_path):  # noqa: F811
             str(port),
         ],
         cwd=root,
-        env={**os.environ, "PYTHONPATH": str(root)},
+        env=environment,
         stdout=log,
         stderr=log,
     )
@@ -117,10 +122,7 @@ def test_two_tasks_reuse_http_service_and_preserve_hold(http_recorder):
                 assert set(post["errors"]) <= {
                     f"arm:{side}" for side in ("left", "right") if side not in post["arms"]
                 }
-                assert all(
-                    img["published_unix"] >= post["action_response_unix"]
-                    for img in post["images"].values()
-                )
+                assert all(set(img) == {"path"} for img in post["images"].values())
                 measured = post["arms"][arm]
                 assert measured["joints_rad"] == target
                 assert measured["ee_pose"]["frame"] == f"{arm}_base"
@@ -158,7 +160,9 @@ def test_two_tasks_reuse_http_service_and_preserve_hold(http_recorder):
         assert {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()} == finished_files
     assert len(set(directories)) == 2
     for directory in output.iterdir():
-        assert frame(directory / "rollout.mp4").size == (1920, 516)
+        assert all(
+            frame(directory / f"{role}.mp4").size == (320, 240) for role in ("left", "top", "right")
+        )
         assert (directory / "prompt.txt").read_text().strip()
         events = [
             json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()
@@ -238,7 +242,9 @@ def test_recorded_tracking_stop_recover_correct_and_return(http_recorder):
     assert final["arms"]["left"]["gripper_opening"] == pytest.approx(0.2)
     assert call("recording", {"operation": "finish"})["status"] == "finished"
     directory = Path(start["output"])
-    assert frame(directory / "rollout.mp4").size == (1920, 516)
+    assert all(
+        frame(directory / f"{role}.mp4").size == (320, 240) for role in ("left", "top", "right")
+    )
     events = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
     assert any(e.get("arguments", {}).get("operation") == "recover" for e in events)
     assert any(e.get("result", {}).get("status") == "recovered" for e in events)
@@ -292,7 +298,10 @@ def test_premature_end_after_return_fault_resumes_through_review(http_recorder, 
         call("execute", {"action": {**action, "joints_rad": [0] * 6, "duration_s": 0.5}})
         call("observe")
         assert call("recording", {"operation": "finish"})["task"]["phase"] == "review"
-        assert frame(Path(started["output"]) / "rollout.mp4").size == (1920, 516)
+        assert all(
+            frame(Path(started["output"]) / f"{role}.mp4").size == (320, 240)
+            for role in ("left", "top", "right")
+        )
         reviewed = call(
             "recording",
             {

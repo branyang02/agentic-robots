@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -44,6 +45,55 @@ def test_invalid_modes_rejected(camera_env, monkeypatch, setting, value):
     monkeypatch.setenv(f"TOP_CAMERA_{setting}", value)
     with pytest.raises(ValueError, match="positive and finite"):
         cameras.configured_cameras()
+
+
+@pytest.mark.parametrize("role", ["left", "right", "top"])
+@pytest.mark.parametrize(("kind", "fmt"), [("realsense", "yuyv422"), ("usb", "mjpeg")])
+def test_json_camera_type_is_independent_of_role(monkeypatch, role, kind, fmt):
+    setting = dict(type=kind, path="/dev/v4l/by-path/camera", width=1920, height=1080, fps=8)
+    monkeypatch.setenv(f"{role.upper()}_CAMERA", json.dumps(setting))
+    monkeypatch.setenv(f"{role.upper()}_CAMERA_FPS", "999")  # JSON is authoritative.
+    config = cameras.configured_cameras((role,))[role]
+    assert config == dict(
+        type=kind, device=setting["path"], width=1920, height=1080, fps=8, format=fmt
+    )
+    assert cameras.input_args(config)[-1] == setting["path"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        dict(path="relative"),
+        dict(type="depth"),
+        dict(fps=True),
+        dict(width=1.5),
+        dict(fps=0),
+        dict(fps=float("nan")),
+        dict(format="rgb24"),
+        dict(typo=1),
+        dict(type="realsense", format="mjpeg"),
+    ],
+)
+def test_bad_camera_json_fails_before_opening_devices(change):
+    config = dict(type="usb", path="/dev/fake", width=1280, height=720, fps=30)
+    with pytest.raises(ValueError):
+        cameras.camera_config(json.dumps({**config, **change}), "LEFT_CAMERA")
+
+
+@pytest.mark.parametrize("value", ["[]", "null", "{}", '{"type":"usb"}', "{path: invalid}"])
+def test_incomplete_camera_json_is_rejected(value):
+    with pytest.raises(ValueError):
+        cameras.camera_config(value, "LEFT_CAMERA")
+
+
+def test_usb_uncompressed_format_override():
+    config = cameras.camera_config(
+        json.dumps(
+            dict(type="usb", path="/dev/fake", width=640, height=480, fps=30, format="yuyv422")
+        ),
+        "TOP_CAMERA",
+    )
+    assert config["format"] == "yuyv422"
 
 
 @pytest.mark.parametrize(("frames", "passed"), [(120, True), (90, False)])

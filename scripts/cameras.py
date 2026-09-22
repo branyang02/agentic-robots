@@ -22,6 +22,11 @@ def main():
     if args.command == "list":
         for index, camera in enumerate(discover()):
             print(json.dumps(camera, indent=2))
+            setting = {
+                "path": camera["device"],
+                **{k: camera[k] for k in ("type", "width", "height", "fps", "format")},
+            }
+            print("Camera setting (assign to any role): " + json.dumps(setting))
             print(capture(f"discovered-{index}", camera, 0))
         return
     cameras = configured_cameras()

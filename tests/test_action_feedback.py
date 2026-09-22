@@ -1,9 +1,7 @@
 """Post-action evidence and failure preservation using simulated feedback only."""
 
 import copy
-import os
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock
 
@@ -15,7 +13,7 @@ from scipy.spatial.transform import Rotation
 from agentic_robots.bridge import Action, Motion
 from agentic_robots.feedback import ActionFeedback
 from agentic_robots.mcp import structured
-from agentic_robots.recording import ORDER, RecordingBridge, Rollout
+from agentic_robots.recording import RecordingBridge, Rollout
 from tests.robot_fakes import FakeArm
 from tests.test_robot_record import cameras, ready_fake
 
@@ -68,40 +66,6 @@ def test_bad_feedback_never_becomes_a_claimed_current_ee_pose(problem):
     assert result["post_action"]["arms"]["left"]["ee_pose"] is None
     assert result["post_action"]["arms"]["right"]["ee_pose"] is not None
     assert "pose:left" in result["post_action"]["errors"]
-
-
-def test_snapshots_wait_for_post_action_publication_and_keep_immutable_files(tmp_path):
-    r = Rollout(tmp_path / "run", "test", cameras(), "unused")
-    ready_fake(r)
-    after = time.time()
-
-    def publish():
-        time.sleep(0.08)
-        for role in ORDER:
-            p = r.output / f"{role}-next.png"
-            Image.new("RGB", (20, 10), "blue").save(p)
-            p.replace(r.output / f"{role}.png")
-
-    with ThreadPoolExecutor() as pool:
-        task = pool.submit(publish)
-        images, errors = r.snapshots(after=after)
-        task.result()
-    assert not errors and set(images) == set(ORDER)
-    for record in images.values():
-        assert record["published_unix"] >= after
-        assert Image.open(record["path"]).getpixel((0, 0)) == (0, 0, 255)
-    ready_fake(r)
-    assert Image.open(images["top"]["path"]).getpixel((0, 0)) == (0, 0, 255)
-
-
-def test_stale_frames_are_not_returned_as_post_action_evidence(tmp_path):
-    r = Rollout(tmp_path / "run", "test", cameras(), "unused")
-    ready_fake(r)
-    for role in ORDER:
-        os.utime(r.output / f"{role}.png", (1, 1))
-    r.process.poll.return_value = 1
-    images, errors = r.snapshots(after=time.time())
-    assert not images and set(errors) == {f"camera:{role}" for role in ORDER}
 
 
 def test_observation_exception_preserves_motion_outcome_and_does_not_retry(tmp_path, monkeypatch):

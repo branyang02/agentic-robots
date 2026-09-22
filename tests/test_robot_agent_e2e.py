@@ -172,7 +172,9 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, mo
         assert status["task"]["review"]["evidence"]
         directory = Path(status["output"])
         assert prompt in (directory / "prompt.txt").read_text()
-        assert frame(directory / "rollout.mp4").size == (1920, 516)
+        assert all(
+            frame(directory / f"{role}.mp4").size == (320, 240) for role in ("left", "top", "right")
+        )
         state = call("session", {"operation": "status"})
         assert set(state["arms"]) == {"left", "right"}
         assert all(
