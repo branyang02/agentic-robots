@@ -21,6 +21,11 @@ from agentic_robots.task import TERMINAL, Review, control_unavailable, neutral_f
 ORDER = ("left", "top", "right")
 
 
+def preview_path(output, role, camera):
+    suffix = "jpg" if camera.get("resolution") == "full" else "png"
+    return output / f"{role}.{suffix}"
+
+
 def capture_command(cameras, output, epoch):
     command = [
         "ffmpeg",
@@ -40,53 +45,62 @@ def capture_command(cameras, output, epoch):
             command += ["-re", "-f", "lavfi", "-i", camera["device"]]
             origin = "STARTPTS"
         else:
-            command += ["-thread_queue_size", "64", "-timestamps", "abs", *input_args(camera)]
+            # Some USB drivers jump their clock during longer captures. Use host
+            # receive time for the video/event timeline instead of device timestamps.
+            command += [
+                "-thread_queue_size",
+                "1",
+                "-use_wallclock_as_timestamps",
+                "1",
+                *input_args(camera),
+            ]
             origin = f"{epoch:.6f}/TB"
+        scale = (
+            "scale=640:480:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            if camera.get("resolution", "current") == "current"
+            else ""
+        )
         filters += [
-            f"[{i}:v]setpts=PTS-{origin},"
-            f"scale=640:480:force_original_aspect_ratio=decrease,setsar=1,split[v{i}][p{i}]",
-            f"[v{i}]pad=640:480:(ow-iw)/2:(oh-ih)/2,"
-            f"drawtext=text='{role.upper()}':x=12:y=10:fontsize=24:fontcolor=white:"
-            f"box=1:boxcolor=black@0.65[panel{i}]",
+            f"[{i}:v]setpts=PTS-{origin},{scale}setsar=1,split[v{i}][p{i}]",
             f"[p{i}]fps=5[preview{i}]",
         ]
-    filters += [
-        "[panel0][panel1][panel2]hstack=inputs=3:shortest=1,fps=30,"
-        "pad=iw:ih+36:0:0,"
-        "drawtext=text='t=%{pts\\:hms}':x=12:y=h-28:fontsize=20:fontcolor=white,"
-        "drawtext=textfile=phase.txt:reload=1:expansion=none:"
-        "x=260:y=h-28:fontsize=20:fontcolor=white[video]"
-    ]
+    command += ["-filter_complex", ";".join(filters)]
+    for i, role in enumerate(ORDER):
+        command += ["-map", f"[v{i}]", f"-metadata:s:v:{i}", f"title={role}"]
     command += [
-        "-filter_complex",
-        ";".join(filters),
-        "-map",
-        "[video]",
         "-c:v",
         "libx264",
         "-preset",
         "ultrafast",
         "-crf",
-        "23",
+        "18",
         "-threads",
         "2",
         "-pix_fmt",
         "yuv420p",
         "-fps_mode",
-        "passthrough",
+        "vfr",
+        # Matroska uses milliseconds. Drop duplicate timestamps from buffered
+        # arrivals rather than rounding onto a coarse frame-rate grid.
+        "-enc_time_base",
+        "1:1000",
         "-flush_packets",
         "1",
         str(output / "capture.mkv"),
     ]
     for i, role in enumerate(ORDER):
+        # Full-size PNG encoding cannot keep up with the three live streams.
+        # JPEG preserves dimensions and full chroma with much smaller frames.
+        codec = (
+            ["-c:v", "mjpeg", "-q:v", "2", "-pix_fmt", "yuvj444p"]
+            if cameras[role].get("resolution") == "full"
+            else ["-c:v", "png", "-compression_level", "1"]
+        )
         command += [
             "-map",
             f"[preview{i}]",
-            "-c:v",
-            "png",
+            *codec,
             "-threads",
-            "1",
-            "-compression_level",
             "1",
             "-f",
             "image2",
@@ -94,7 +108,7 @@ def capture_command(cameras, output, epoch):
             "1",
             "-atomic_writing",
             "1",
-            str(output / f"{role}.png"),
+            str(preview_path(output, role, cameras[role])),
         ]
     return command
 
@@ -131,8 +145,8 @@ class Rollout:
             "camera_order": ORDER,
             "cameras": cameras,
             "telemetry_requested_hz": 5,
-            "timestamps": "Video t and event elapsed_s use the same software wall-clock origin. "
-            "Camera timestamps are converted by V4L2; cameras are not hardware synchronized. "
+            "timestamps": "Video uses host receive time relative to the same wall-clock origin "
+            "as event elapsed_s; cameras are not hardware synchronized. "
             "Snapshot timestamps are file publication times, not sensor exposure times.",
         }
         (self.output / "prompt.txt").write_text(prompt + "\n")
@@ -166,9 +180,6 @@ class Rollout:
 
     def note(self, text):
         self.event("note", text=text)
-        temporary = self.output / f"phase-{uuid.uuid4().hex}.tmp"
-        temporary.write_text(" ".join(text.split())[:150])
-        temporary.replace(self.output / "phase.txt")
 
     def start(self):
         try:
@@ -194,7 +205,9 @@ class Rollout:
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
                     raise RuntimeError("Camera capture exited; inspect ffmpeg.log")
-                if all((self.output / f"{role}.png").exists() for role in ORDER):
+                if all(
+                    preview_path(self.output, role, self.cameras[role]).exists() for role in ORDER
+                ):
                     break
                 time.sleep(0.05)
             else:
@@ -225,7 +238,7 @@ class Rollout:
     def status(self):
         ages = {}
         for role in ORDER:
-            path = self.output / f"{role}.png"
+            path = preview_path(self.output, role, self.cameras[role])
             ages[role] = time.time() - path.stat().st_mtime if path.exists() else None
         alive = self.process is not None and self.process.poll() is None
         return {
@@ -253,8 +266,9 @@ class Rollout:
             if after is not None:
                 while time.monotonic() < deadline:
                     if all(
-                        (self.output / f"{role}.png").exists()
-                        and (self.output / f"{role}.png").stat().st_mtime >= after
+                        preview_path(self.output, role, self.cameras[role]).exists()
+                        and preview_path(self.output, role, self.cameras[role]).stat().st_mtime
+                        >= after
                         for role in ORDER
                     ):
                         break
@@ -266,13 +280,14 @@ class Rollout:
             for role in ORDER:
                 try:
                     # Open pins the inode while FFmpeg atomically publishes the next frame.
-                    with (self.output / f"{role}.png").open("rb") as source:
+                    preview = preview_path(self.output, role, self.cameras[role])
+                    with preview.open("rb") as source:
                         published = os.fstat(source.fileno()).st_mtime
-                        if after is not None and (
-                            published < after or not 0 <= time.time() - published < 2
-                        ):
+                        if not 0 <= time.time() - published < 2:
+                            raise ValueError("No recent camera frame")
+                        if after is not None and published < after:
                             raise ValueError("No fresh frame published after action response")
-                        path = directory / f"{role}.png"
+                        path = directory / preview.name
                         path.write_bytes(source.read())
                     with Image.open(path) as frame:
                         frame.load()
@@ -316,46 +331,47 @@ class Rollout:
         try:
             if not self.process or self.process.returncode not in (0, 255):
                 raise RuntimeError("Camera capture failed; inspect ffmpeg.log")
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-nostdin",
-                    "-y",
-                    "-copyts",
-                    "-i",
-                    str(self.output / "capture.mkv"),
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-copyts",
+                "-i",
+                str(self.output / "capture.mkv"),
+            ]
+            for i, role in enumerate(ORDER):
+                command += [
                     "-map",
-                    "0:v:0",
+                    f"0:v:{i}",
                     "-c",
                     "copy",
                     "-movflags",
                     "+faststart",
-                    str(self.output / "rollout.mp4"),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=60,
-            )
-            probe = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_format",
-                    "-show_streams",
-                    "-of",
-                    "json",
-                    str(self.output / "rollout.mp4"),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            self.manifest["video"] = json.loads(probe.stdout)
+                    str(self.output / f"{role}.mp4"),
+                ]
+            subprocess.run(command, check=True, capture_output=True, timeout=60)
+            self.manifest["videos"] = {}
+            for role in ORDER:
+                probe = subprocess.run(
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-show_format",
+                        "-show_streams",
+                        "-of",
+                        "json",
+                        str(self.output / f"{role}.mp4"),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.manifest["videos"][role] = json.loads(probe.stdout)
             self.state = "failed" if self.error else "finished"
         except Exception as exc:
             self.state, self.error = "failed", str(exc)

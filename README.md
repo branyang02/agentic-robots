@@ -58,18 +58,16 @@ uv run setup-cameras list
 ```
 
 Open `outputs/discovered-*/preview.png`. Cover one lens if needed to identify its side.
-Use each camera's printed stable device path:
-
-- `left` and `right`: ultrawides, MJPEG, 1280×720.
-- `top`: RealSense color stream, YUYV, 640×480.
-
-All request 30 FPS. RealSense capture is RGB only through V4L2; depth is not enabled.
+Use each camera's printed stable device path. RealSense capture is RGB only through
+V4L2; depth is not enabled. MJPEG USB cameras and RealSense YUYV cameras use the same
+FFmpeg pipeline; the input format is discovered rather than assigned by camera role.
 Paths depend on the USB port. Rediscover after changing ports.
 
 ## Set hardware values
 
 Replace the placeholders below with the values printed during discovery.
-Run these exports in each terminal before using the setup scripts.
+Run these exports in each terminal before using the setup scripts, or save them in
+the ignored `.env` file and use `uv run --env-file .env <command>`.
 
 ```bash
 export ROBOT_ID=dual-yam
@@ -78,9 +76,34 @@ export RIGHT_CAN=RIGHT_ADAPTER_SERIAL
 export LEFT_CAMERA=/dev/v4l/by-path/LEFT_CAMERA_PATH
 export RIGHT_CAMERA=/dev/v4l/by-path/RIGHT_CAMERA_PATH
 export TOP_CAMERA=/dev/v4l/by-path/REALSENSE_RGB_PATH
+export CAMERA_RESOLUTION=current
 ```
 
 `TOP_CAMERA` is the RealSense RGB device path printed by discovery.
+
+Choose one resolution for all three cameras; no FPS setting is needed:
+
+- `current` (default): preserves the existing capture sizes (MJPEG 1280×720,
+  YUYV 640×480) and fits observations/videos within 640×480 without changing aspect
+  ratio. Requests the supported frame rate closest to 30 FPS.
+- `full`: captures the maximum advertised RGB resolution and preserves it in both
+  observations and videos. At that size, prefers MJPEG when available, then selects
+  the lowest supported frame rate at or above 5 FPS. Unsupported modes fail with a
+  setup error rather than silently reducing resolution.
+
+During rollouts, full-resolution previews and observations use high-quality JPEG
+(FFmpeg quality 2, full chroma) to keep capture responsive and model requests small
+without resizing. Current-mode previews and observations remain PNG.
+Video encoding is independent of observation image encoding.
+
+On our current hardware, `full` selects wrist cameras at **1920×1200, 5 FPS** and
+the RealSense top camera at **1920×1080, 8 FPS**. Selection is repeated from the
+connected devices, so it can change with camera model or USB connection. Only
+discrete MJPEG/YUYV RGB modes are supported.
+
+To switch to full resolution, change just `CAMERA_RESOLUTION=full`, rerun the camera
+check, and start the recorder with that environment. Stop an existing recorder only
+after finishing its rollout; the motor controller does not need restarting.
 
 ## Configure CAN
 
@@ -107,8 +130,12 @@ Open `outputs/left/preview.png`, `outputs/right/preview.png`, and `outputs/top/p
 Check side assignments, exposure, focus, and visibility of the work area.
 The scripts enable automatic exposure on MJPEG ultrawides to avoid stale manual settings.
 
-The check runs all three cameras concurrently for 15 seconds, prints measured rates,
-and saves `outputs/report.json`. It fails outside 29–31 FPS. This tests capture, not inference.
+Preview and check print each selected resolution and automatic FPS. The check runs
+all three cameras concurrently for 15 seconds and saves `outputs/report.json`.
+Occasional dropped frames do not fail the check or end a rollout; missing frames or
+capture failures do. This tests capture, not inference. During a rollout, observation
+images update at 5 Hz and frames older than two seconds are rejected. Post-action
+responses wait for newly published images; publication time is not sensor exposure time.
 
 ## Live camera view
 
@@ -118,7 +145,7 @@ From a terminal on the robot's graphical desktop, with the hardware values expor
 uv run view-cameras
 ```
 
-One window shows **left | top (RealSense) | right** side by side at 30 FPS.
+One window shows **left | top | right** side by side using the selected capture modes.
 The views keep their original aspect ratios. Press **Q**, **Esc**, or close the window to quit.
 Stop other camera programs first. A headless terminal fails before opening the cameras.
 
@@ -332,7 +359,7 @@ The additional `recording` tool takes one of these argument objects:
 {"operation":"finish"}
 ```
 
-Phase notes are logged and displayed in the video. After the task and its final
+Phase notes are logged in `events.jsonl`. After the task and its final
 observation, `finish` verifies measured neutral and refuses while an action is active.
 The agent then reviews the video and records its decision with `recording(review)`.
 The service accepts another `start` after that review; retries retain the previous
@@ -342,19 +369,24 @@ Between tasks, `observe` returns live joint feedback without camera images, and
 controller calls leave completed recordings unchanged.
 The resulting directory contains:
 
-- `rollout.mp4`: the continuous left / top / right camera video, with elapsed time
-  and phase notes. It preserves the full run, including pauses between actions.
-- `capture.mkv`: the capture container retained for recovery if finalization fails.
+- `left.mp4`, `top.mp4`, `right.mp4`: separate continuous videos at the selected
+  resolution and each camera's input cadence, including pauses between actions.
+  There is no forced 30 FPS conversion, combined layout, or text overlay. Compose
+  layouts and timelapses afterward.
+- `capture.mkv`: the three-stream capture container retained for recovery if
+  finalization fails. MP4 finalization copies streams without re-encoding.
 - `events.jsonl`: the prompt/notes, timestamped requests and responses, observations,
   and joint/velocity/gripper/temperature/health feedback sampled at a requested 5 Hz.
 - `observations/`: immutable images actually returned to the agent.
-- `manifest.json` and `ffmpeg.log`: configuration, timestamps, video metadata, and
+- `manifest.json` and `ffmpeg.log`: configuration, timestamps, per-camera `videos` metadata, and
   recording errors. Check the manifest's final state before treating a run as complete.
 
-Video and event timestamps share a software wall-clock origin. Camera timestamps
-are converted by V4L2; the cameras are not hardware synchronized. Snapshot timestamps
-are file publication times, and telemetry rate is best effort. This is a record of
-what was commanded and observed, not an independent measurement of Cartesian accuracy.
+Video and event timestamps share a software wall-clock origin. Video uses host receive
+times because USB device clocks can jump; the cameras are not hardware synchronized.
+The videos can differ slightly in duration because cameras start delivering frames
+at different times and stop on different frame boundaries. Snapshot timestamps are
+file publication times, and telemetry rate is best effort. This is a record of what
+was commanded and observed, not an independent measurement of Cartesian accuracy.
 
 If recording becomes unavailable, its endpoint rejects new task motion with detailed
 recording status. An explicit `recording(return, text=<reason>)` declaration enables

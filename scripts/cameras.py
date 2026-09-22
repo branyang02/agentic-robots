@@ -1,4 +1,4 @@
-"""Discover cameras, save previews, or test all configured RGB streams at 30 FPS."""
+"""Discover cameras, save previews, or check all configured RGB streams."""
 
 import concurrent.futures
 import json
@@ -17,14 +17,18 @@ class Args:
     """Discover cameras, save previews, or check configured frame rates."""
 
 
-def main():
-    args = tyro.cli(Args, description=__doc__)
+def run(args):
     if args.command == "list":
         for index, camera in enumerate(discover()):
             print(json.dumps(camera, indent=2))
             print(capture(f"discovered-{index}", camera, 0))
         return
     cameras = configured_cameras()
+    print(f"Camera resolution: {next(iter(cameras.values()))['resolution']}")
+    print("Camera   Resolution    Automatic FPS")
+    for role, camera in cameras.items():
+        size = f"{camera['width']}x{camera['height']}"
+        print(f"{role:<8} {size:<13} {camera['fps']:g}")
     devices = [Path(c["device"]).resolve() for c in cameras.values()]
     if len(set(devices)) != len(devices):
         raise ValueError("Two camera roles point to the same device")
@@ -37,7 +41,15 @@ def main():
     print(json.dumps(results, indent=2))
     Path("outputs/report.json").write_text(json.dumps(results, indent=2) + "\n")
     if any(not row.get("passed", True) for row in results):
-        raise SystemExit("Camera rate check failed; see outputs/report.json")
+        raise SystemExit("Camera capture check failed; see outputs/report.json")
+
+
+def main():
+    args = tyro.cli(Args, description=__doc__)
+    try:
+        run(args)
+    except (ValueError, OSError, KeyError) as exc:
+        raise SystemExit(f"setup-cameras: {exc}") from exc
 
 
 if __name__ == "__main__":

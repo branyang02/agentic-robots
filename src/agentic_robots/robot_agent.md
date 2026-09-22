@@ -35,7 +35,9 @@ For each robot task:
    0.05 rad/s, no latched fault)
    and refuses if either arm is unverified or actions are active. Use its detailed
    feedback to correct the return. These are completion tolerances, not motion limits.
-5. Review the saved `rollout.mp4`, including key movements, failures, and final outcome.
+5. Review the saved `left.mp4`, `top.mp4`, and `right.mp4`, including key movements,
+   failures, and final outcome. These are separate camera videos without overlays;
+   include the camera filename when citing a video timestamp.
    Inspect video or extracted frames and state which you reviewed. Then call `recording`
    with `{"operation":"review","review":{"outcome":"success","summary":"<observed result>",
    "evidence":["<video timestamp/frame and relevant feedback>"]}}`.

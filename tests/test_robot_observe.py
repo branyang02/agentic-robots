@@ -63,6 +63,11 @@ def test_camera_snapshot_tolerates_missing_configuration_and_capture_failure(mon
         monkeypatch.delenv(f"{side}_CAMERA", raising=False)
     monkeypatch.setenv("LEFT_CAMERA", "/left")
     monkeypatch.setenv("RIGHT_CAMERA", "/right")
+    monkeypatch.delenv("CAMERA_RESOLUTION", raising=False)
+    monkeypatch.setattr(
+        "agentic_robots.cameras.formats",
+        lambda _: "[0]: 'MJPG'\nSize: Discrete 1280x720\nInterval: Discrete 0.033s (30.000 fps)",
+    )
 
     def capture(name, camera, seconds):
         if camera["device"] == "/right":

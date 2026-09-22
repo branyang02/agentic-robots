@@ -7,8 +7,19 @@ from pathlib import Path
 from typing import Literal
 
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
+from PIL import Image
 
 from agentic_robots.bridge import Action, json_ready
+
+
+def image_content(path):
+    with Image.open(path) as image:
+        mime_type = Image.MIME[image.format]
+    return ImageContent(
+        type="image",
+        mimeType=mime_type,
+        data=base64.b64encode(Path(path).read_bytes()).decode(),
+    )
 
 
 def structured(value):
@@ -18,11 +29,10 @@ def structured(value):
     if observation is not None:
         for name, record in list(observation["images"].items()):
             try:
-                data = base64.b64encode(Path(record["path"]).read_bytes()).decode()
                 images.extend(
                     [
                         TextContent(type="text", text=f"{name} post-action camera"),
-                        ImageContent(type="image", mimeType="image/png", data=data),
+                        image_content(record["path"]),
                     ]
                 )
             except OSError as exc:
@@ -52,13 +62,7 @@ def register_robot_tools(server, bridge):
         content = [TextContent(type="text", text=json.dumps(observation))]
         for name, record in observation["images"].items():
             content.append(TextContent(type="text", text=f"{name} camera"))
-            content.append(
-                ImageContent(
-                    type="image",
-                    mimeType="image/png",
-                    data=base64.b64encode(Path(record["path"]).read_bytes()).decode(),
-                )
-            )
+            content.append(image_content(record["path"]))
         return CallToolResult(content=content, structuredContent=observation)
 
     @server.tool()

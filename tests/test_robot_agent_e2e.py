@@ -16,7 +16,7 @@ from mcp import Client
 
 from agentic_robots.codex import app_call, locate_app
 from tests.test_robot_http import http_robot  # noqa: F401
-from tests.test_robot_record import frame
+from tests.test_robot_record import ORDER, frame
 from tests.test_robot_record_service import http_recorder  # noqa: F401
 
 pytestmark = pytest.mark.e2e
@@ -172,7 +172,7 @@ def test_desktop_initialization_then_two_agent_tasks(http_recorder, tmp_path, mo
         assert status["task"]["review"]["evidence"]
         directory = Path(status["output"])
         assert prompt in (directory / "prompt.txt").read_text()
-        assert frame(directory / "rollout.mp4").size == (1920, 516)
+        assert all(frame(directory / f"{role}.mp4").size == (640, 480) for role in ORDER)
         state = call("session", {"operation": "status"})
         assert set(state["arms"]) == {"left", "right"}
         assert all(

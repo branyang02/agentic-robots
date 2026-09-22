@@ -23,7 +23,7 @@ def test_dummy_display_is_not_a_screen(monkeypatch):
 
 def test_capture_orders_cameras_and_preserves_aspect_ratio():
     cameras = {
-        role: dict(device=f"/dev/{role}", format="mjpeg", width=1280, height=720)
+        role: dict(device=f"/dev/{role}", format="mjpeg", width=1280, height=720, fps=30)
         for role in ("left", "right", "top")
     }
     command = view_cameras.capture_command(cameras)

@@ -3,7 +3,6 @@ import json
 import pytest
 
 from agentic_robots.calibration import save_limits
-from agentic_robots.cameras import configured_cameras, input_args
 from agentic_robots.can import ready, resolve
 
 
@@ -23,17 +22,6 @@ def test_unhealthy_can_is_rejected(state):
     assert not ready(dict(row, state=state))
     assert not ready(dict(row, mtu=72))
     assert not ready(dict(row, bitrate=500_000))
-
-
-def test_camera_profiles_request_thirty_fps(monkeypatch):
-    for role in ("LEFT", "RIGHT", "TOP"):
-        monkeypatch.setenv(f"{role}_CAMERA", f"/dev/{role.lower()}")
-    cameras = configured_cameras()
-    assert set(cameras) == {"left", "right", "top"}
-    for camera in cameras.values():
-        args = input_args(camera)
-        assert args[args.index("-framerate") + 1] == "30"
-        assert args[-1] == camera["device"]
 
 
 def test_calibration_preserves_other_side_and_rejects_bad_limits(tmp_path):
