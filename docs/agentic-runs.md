@@ -20,8 +20,9 @@ flowchart LR
 
 Complete the [README hardware setup](../README.md): dependencies, adapters, CAN,
 cameras, and gripper calibration. Save `ROBOT_ID`, `LEFT_CAN`, `RIGHT_CAN`,
-`LEFT_CAMERA`, `RIGHT_CAMERA`, and `TOP_CAMERA` as shell assignments in the ignored
-`.env` file. Calibration stays local in `calibration/<ROBOT_ID>.json`.
+`LEFT_CAMERA`, `RIGHT_CAMERA`, `TOP_CAMERA`, and `CAMERA_RESOLUTION` (`current` or
+`full`) as shell assignments in the ignored `.env` file. FPS is selected automatically.
+Calibration stays local in `calibration/<ROBOT_ID>.json`.
 Run the following commands from the repository root on the robot computer.
 
 Inspect an existing controller first:
@@ -203,7 +204,7 @@ The recorder's additional tool accepts:
 {"operation":"note","text":"Trace the upper lobes"}
 {"operation":"return","text":"Task completed; returning both arms"}
 {"operation":"finish"}
-{"operation":"review","review":{"outcome":"success","summary":"Observed task result","evidence":["rollout.mp4 at 00:18 and final joint observation"]}}
+{"operation":"review","review":{"outcome":"success","summary":"Observed task result","evidence":["top.mp4 at 00:18 and final joint observation"]}}
 ```
 
 `start` refuses to replace an active or unreviewed attempt. `finish` checks two fresh
@@ -224,10 +225,11 @@ accepted as unavailable control. Outcome `paused` records an explicit user stop.
 Finalizing files during process cleanup is separate from completing a task.
 No recorder operation releases arm torque.
 
-Each directory contains `rollout.mp4`, `capture.mkv`, `events.jsonl`, `observations/`,
-`manifest.json`, `prompt.txt`, and `ffmpeg.log`. Video includes pauses between actions,
-camera labels, elapsed time, and phase notes. Events include tool requests/results,
-immutable observations, and telemetry. Check the final manifest before claiming a
+Each directory contains `left.mp4`, `top.mp4`, `right.mp4`, `capture.mkv`, `events.jsonl`,
+`observations/`, `manifest.json`, `prompt.txt`, and `ffmpeg.log`. The three videos keep
+the selected resolution and each camera's input cadence, including pauses between
+actions. Layouts and overlays can be added afterward. Events include phase notes,
+tool requests/results, immutable observations, and telemetry. Check the final manifest before claiming a
 complete recording. Camera timestamps are not hardware synchronized; video is not
 an independent measurement of Cartesian accuracy.
 

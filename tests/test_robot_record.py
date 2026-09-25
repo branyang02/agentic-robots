@@ -1,11 +1,13 @@
 import asyncio
 import io
 import json
+import os
 import socket
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -76,6 +78,16 @@ def test_observations_are_immutable_and_use_shared_frames(rollout):
     assert "camera:top" in partial["errors"]
     assert "left" in partial["arms"]
     assert "published_unix" in first["images"]["left"]
+
+
+def test_observe_rejects_stale_images_even_without_an_action(rollout):
+    ready_fake(rollout)
+    past = time.time() - 3
+    os.utime(rollout.output / "left.png", (past, past))
+    result = RecordingBridge(rollout).observe()
+    assert "left" not in result["images"]
+    assert "No recent camera frame" in result["errors"]["camera:left"]
+    assert set(result["images"]) == {"top", "right"}
 
 
 def test_actions_forward_unchanged_and_preserve_rejection(rollout, monkeypatch):
@@ -277,7 +289,7 @@ def frame(path):
     return Image.open(io.BytesIO(result.stdout)).convert("RGB")
 
 
-def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout):
+def test_real_ffmpeg_records_three_videos_and_preserves_input_cadence(rollout):
     # Independent camera clocks do not produce identical input frame timestamps.
     rollout.cameras["top"]["device"] = "color=c=green:s=640x480:r=29"
     try:
@@ -290,14 +302,15 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout):
     finally:
         result = rollout.finish()
     assert result["status"] == "finished", (rollout.output / "ffmpeg.log").read_text()
-    image = frame(rollout.output / "rollout.mp4")
-    assert image.size == (1920, 516)
-    for x, channel in [(320, 0), (960, 1), (1600, 2)]:
-        pixel = image.getpixel((x, 240))
+    assert {p.name for p in rollout.output.glob("*.mp4")} == {f"{role}.mp4" for role in ORDER}
+    for channel, role in enumerate(ORDER):
+        image = frame(rollout.output / f"{role}.mp4")
+        assert image.size == (640, 480)
+        pixel = image.getpixel((320, 240))
         assert pixel[channel] > 100
         assert all(value < 10 for i, value in enumerate(pixel) if i != channel)
+        assert float(rollout.manifest["videos"][role]["format"]["duration"]) > 1
     assert any(e["kind"] == "telemetry" for e in events(rollout))
-    assert float(rollout.manifest["video"]["format"]["duration"]) > 1
     packets = subprocess.run(
         [
             "ffprobe",
@@ -309,7 +322,7 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout):
             "packet=pts_time",
             "-of",
             "csv=p=0",
-            str(rollout.output / "rollout.mp4"),
+            str(rollout.output / "top.mp4"),
         ],
         check=True,
         capture_output=True,
@@ -317,9 +330,48 @@ def test_real_ffmpeg_records_all_panels_and_finalizes_mp4(rollout):
         timeout=10,
     )
     times = [float(line) for line in packets.stdout.splitlines()]
-    # Matroska stores millisecond timecodes: a 30 fps cadence alternates 33/34 ms.
-    assert all(b - a == pytest.approx(1 / 30, abs=0.001) for a, b in zip(times, times[1:]))
+    # No forced 30 FPS output: the top camera's 29 FPS cadence is retained.
+    assert len(times) > 10
+    assert all(b - a == pytest.approx(1 / 29, abs=0.001) for a, b in zip(times, times[1:]))
     assert rollout.finish()["status"] == "finished"
+
+
+@pytest.mark.parametrize("mode", ["current", "full"])
+def test_high_resolution_inputs_observations_and_video_agree(rollout, mode):
+    for role in ORDER:
+        width, height, fps = (1920, 1080, 8) if role == "top" else (1920, 1200, 5)
+        # Drop some frames deliberately; a gap must not kill recording or invent video frames.
+        rollout.cameras[role] = dict(
+            format="lavfi",
+            resolution=mode,
+            device=f"testsrc2=s={width}x{height}:r={fps},select='not(eq(mod(n,7),3))'",
+        )
+    try:
+        rollout.start()
+        first, errors = rollout.snapshots()
+        assert not errors
+        time.sleep(0.5)
+        second, errors = rollout.snapshots(after=time.time())
+        assert not errors
+        for role in ORDER:
+            expected = (1920, 1080) if role == "top" else (1920, 1200)
+            if mode == "current":
+                expected = (640, 360) if role == "top" else (640, 400)
+            image = second[role]
+            assert (image["width"], image["height"]) == expected
+            assert Image.open(image["path"]).format == ("JPEG" if mode == "full" else "PNG")
+            assert Path(first[role]["path"]).read_bytes() != Path(image["path"]).read_bytes()
+    finally:
+        result = rollout.finish()
+    assert result["status"] == "finished", (rollout.output / "ffmpeg.log").read_text()
+    for role in ORDER:
+        assert frame(rollout.output / f"{role}.mp4").size == (
+            second[role]["width"],
+            second[role]["height"],
+        )
+        stream = rollout.manifest["videos"][role]["streams"][0]
+        numerator, denominator = map(int, stream["avg_frame_rate"].split("/"))
+        assert 0 < numerator / denominator <= (8 if role == "top" else 5) + 0.1
 
 
 @pytest.mark.e2e
@@ -382,7 +434,7 @@ def test_mcp_recorded_rollout_against_http_robot_preserves_hold(http_robot, tmp_
         log = events(r)
         assert sum(e["kind"] == "request" and e["tool"] == "execute" for e in log) == 7
         assert not any(e.get("arguments", {}).get("operation") == "release" for e in log)
-        assert frame(r.output / "rollout.mp4").size == (1920, 516)
+        assert all(frame(r.output / f"{role}.mp4").size == (640, 480) for role in ORDER)
     finally:
         r.finish()
 
@@ -483,7 +535,7 @@ def test_http_cli_recorder_shutdown_does_not_stop_controller(http_robot, tmp_pat
         proc.wait(timeout=10)
         assert controller.poll() is None
         assert call("session", {"operation": "status"})["arms"]["left"]["joints_rad"][0] == 0.1
-        assert frame(output / "rollout.mp4").size == (1920, 516)
+        assert all(frame(output / f"{role}.mp4").size == (640, 480) for role in ORDER)
     finally:
         if proc.poll() is None:
             proc.terminate()
