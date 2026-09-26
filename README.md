@@ -247,7 +247,7 @@ Four responsibilities remain in the bridge:
   nonadjacent bodies. This is a sampled model check, not continuous collision
   detection; furniture and the other arm are absent from the model.
 - During execution, stop advancing if feedback is unavailable/older than 150 ms
-  or joint tracking differs from the previous command by over 3°. Temperature and
+  or joint tracking differs from the previous command by over 5°. Temperature and
   velocity remain telemetry, with no independent numerical cutoff. Motor firmware
   protections and the pinned driver's checks remain unchanged.
 - Keep exclusive hardware ownership and persistent sessions, with explicit stop

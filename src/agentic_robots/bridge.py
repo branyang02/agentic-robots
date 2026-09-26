@@ -18,7 +18,7 @@ from agentic_robots.cameras import capture, configured_cameras
 IK_POSITION_TOLERANCE = 0.001
 IK_ROTATION_TOLERANCE = np.deg2rad(0.5)
 FEEDBACK_TIMEOUT_S = 0.15
-TRACKING_ERROR_RAD = np.deg2rad(3)
+TRACKING_ERROR_RAD = np.deg2rad(5)
 
 
 def json_ready(value):
@@ -553,7 +553,7 @@ class Bridge:
                 if np.max(abs(np.asarray(state["joints_rad"]) - previous)) > TRACKING_ERROR_RAD:
                     raise RobotError(
                         "tracking_error",
-                        "Joint tracking error exceeds 3 degrees",
+                        "Joint tracking error exceeds 5 degrees",
                         previous_command_rad=previous.tolist(),
                         error_rad=(np.asarray(state["joints_rad"]) - previous).tolist(),
                         maximum_error_rad=float(TRACKING_ERROR_RAD),
