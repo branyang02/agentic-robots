@@ -5,6 +5,8 @@ Includes an observation/action bridge for Codex. The agent is the Codex conversa
 
 To run an autonomous task with camera observations, numerical actions, feedback
 corrections, and a complete video, follow [Run an agentic task](docs/agentic-runs.md).
+For API-key Codex CLI runs with automatic state and image input before each model
+request, use [robot-codex](docs/agentic-runs.md#codex-cli-with-automatic-observations).
 
 Python 3.11, uv, Ruff, pytest. Hardware uses i2rt pinned to
 `7ed46f4e4e316133a0c39aa6cf34a73d2718e850`; MCP exposes tools to the agent.

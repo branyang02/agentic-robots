@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Minimal dual-YAM hardware setup."
 requires-python = ">=3.11"
 dependencies = [
+  "anyio>=4,<5",
   "httpx2>=2.12,<3",
   "i2rt @ git+https://github.com/AfterQuery-Research/i2rt.git@d527fe853daaf663f2d5fc44ad1643da9ca5edbb",
   "mcp>=2,<3",
@@ -42,6 +43,7 @@ robot-bridge = "scripts.robot_bridge:main"
 robot-call = "scripts.robot_call:main"
 robot-record = "scripts.robot_record:main"
 robot-init = "scripts.robot_init:main"
+robot-codex = "scripts.robot_codex:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentic_robots", "scripts"]

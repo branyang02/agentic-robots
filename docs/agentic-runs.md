@@ -137,6 +137,58 @@ Codex's sandbox or approval settings.
 
 ## Send a task
 
+### Codex CLI with automatic observations
+
+For API-key CLI runs, use `robot-codex` to attach a current observation before
+every model-generation request. Start the controller and recorder as above, finish
+and review any previous task, and save the new task in a text file. Keep
+`OPENAI_API_KEY` in the ignored `.env` file. For example:
+
+```bash
+uv run --env-file .env robot-codex \
+  --task-file /absolute/task.txt \
+  --workspace /absolute/empty-agent-workspace \
+  --output outputs/observation-run-01 \
+  --model gpt-6-astra --reasoning high
+```
+
+Use a new evidence directory and an empty agent workspace for each run. Add
+`--startup-supported` only with established physical startup readiness. Supply
+`--codex /absolute/path/to/codex` if Codex is not on PATH. Set
+`CAMERA_RESOLUTION=full` when starting the recorder for full-resolution images.
+
+The launcher uses the canonical `robot-init` bootstrap and checks its acknowledgment
+before starting recording and sending the task to that same CLI conversation.
+A local HTTP Responses adapter attaches measured joints (rad), velocities (rad/s),
+gripper openings (0–1), and FK EE poses (XYZ metres/XYZW quaternion in each arm's
+base), plus three labelled image attachments before each generation. This also
+applies after shell tools. Original image bytes are passed at their configured
+resolution with `detail: high`; the model service controls its vision preprocessing.
+
+The adapter calls recorder `observe` and reuses its freshness checks. Unhealthy
+feedback and missing images are explicitly unavailable. Additional `observe` and
+`session(status)` remain available. After capture finishes, bundles contain available
+arm feedback but no current camera images; the agent reviews saved videos.
+Initialization and API compaction requests do not collect observations. The next
+generation after compaction receives a new bundle. Freshness means collected before
+the request, not continuous updates during reasoning or synchronized exposures.
+Three images per model request can increase input usage, including during analysis.
+
+Evidence includes prompts, CLI events/final reports, the recording path, and
+`observations/000001.json`, etc. Each bundle records compact state and immutable
+image paths/dimensions/hashes, without credentials. Read these alongside the CLI
+transcript: injected input is not in the CLI's own saved input history. The recorder's
+`events.jsonl` and three MP4s contain commands, measured trajectory, and camera video.
+
+The CLI receives a temporary local relay token; the OpenAI key stays in the launcher.
+The relay binds only to loopback and preserves streaming API errors. It does not
+plan motion, replay commands, or control motors. If the CLI exits or is interrupted,
+inspect recording and motor status: launcher shutdown does not stop a controller,
+release torque, or return arms. This mode uses HTTP Responses and has been tested
+with Codex CLI 0.153.4. Other clients retain the explicit observation flow below.
+
+### Initialized desktop conversation
+
 In that initialized conversation, send:
 
 > Close the grippers and draw a heart shape with both arms.
@@ -254,6 +306,18 @@ forbid CAN sockets; video tests use real FFmpeg and synthetic camera streams. Te
 cover initialization acknowledgment and failure, idle recording, repeated tasks,
 rejection/correction, tracking-fault recovery, neutral/review gates, an early-ended fake
 agent resuming after a return fault, persistent hold, and final MP4 generation.
+
+The model-adapter tests run the installed CLI against a fake model endpoint when
+available, without paid requests. To test the real CLI/model with automatic
+observations, simulated arms, and full-resolution synthetic cameras:
+
+```bash
+ROBOT_CODEX_CLI_E2E=1 uv run --env-file .env pytest -q -s tests/test_robot_codex.py
+```
+
+This opt-in test consumes API usage. Its controller and recorder subprocesses cannot
+open CAN sockets. It verifies camera identification from injected images, changed
+joint/gripper feedback, an intervening shell call, neutral return, videos, and review.
 
 To test the real desktop/LLM round trip, open an **idle disposable local conversation**
 and run the following. It sends visible messages and consumes Codex usage. This test

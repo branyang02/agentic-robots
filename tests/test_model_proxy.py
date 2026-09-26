@@ -12,12 +12,14 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 import httpx2 as httpx
 import pytest
 import uvicorn
 from PIL import Image
 
+from agentic_robots.feedback import ActionFeedback
 from agentic_robots.model_proxy import create_app, observation_message
 from tests.robot_fakes import FakeArm
 
@@ -42,7 +44,7 @@ def sample(tmp_path, index=0):
         images[role] = {"path": str(path)}
     arms = {side: FakeArm().read() for side in ("left", "right")}
     arms["left"]["joints_rad"][0] = index / 100
-    return {"images": images, "arms": arms, "errors": {}, "faults": {}}
+    return ActionFeedback().measured({"images": images, "arms": arms, "errors": {}, "faults": {}})
 
 
 def test_compact_state_and_original_camera_bytes(tmp_path):
@@ -53,14 +55,13 @@ def test_compact_state_and_original_camera_bytes(tmp_path):
     assert audit["state"]["arms"]["left"]["velocity_rad_s"] == [0] * 6
     for role, block in zip(("top", "left", "right"), message["content"][2::2], strict=True):
         data = base64.b64decode(block["image_url"].split(",", 1)[1])
-        from pathlib import Path
-
         assert data == Path(observation["images"][role]["path"]).read_bytes()
         assert Image.open(io.BytesIO(data)).size == (
             audit["images"][role]["width"],
             audit["images"][role]["height"],
         )
     assert "feedback_age_s" not in message["content"][0]["text"]
+    assert audit["state"]["arms"]["right"]["ee_pose"]["frame"] == "right_base"
 
 
 def test_unavailable_evidence_is_explicit_and_not_current(tmp_path):
@@ -133,6 +134,68 @@ def test_every_request_refreshes_preserves_input_and_compaction(tmp_path):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("failure", ["observation", "rate_limit", "connect", "stream"])
+def test_failures_do_not_retry_requests_or_invent_observations(tmp_path, failure):
+    async def run():
+        calls = []
+
+        async def observe():
+            if failure == "observation":
+                raise OSError("Recorder offline")
+            return sample(tmp_path)
+
+        class BrokenStream(BytesStream):
+            async def __aiter__(self):
+                yield b"data: partial\n\n"
+                raise httpx.ReadError("Connection lost")
+
+        stream = BrokenStream(b"") if failure == "stream" else BytesStream(b'{"error":"busy"}')
+
+        async def upstream(request):
+            calls.append(json.loads(request.content))
+            if failure == "connect":
+                raise httpx.ConnectError("Unavailable")
+            return httpx.Response(429 if failure == "rate_limit" else 200, stream=stream)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as target:
+            app = create_app(
+                observe=observe,
+                client=target,
+                upstream="http://test/v1",
+                api_key="secret",
+                token="local",
+                audit_dir=tmp_path / "audit",
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app), base_url="http://local"
+            ) as client:
+
+                async def request():
+                    return await client.post(
+                        "/v1/responses",
+                        json={"input": "task"},
+                        headers={"authorization": "Bearer local"},
+                    )
+
+                if failure == "stream":
+                    with pytest.raises(httpx.ReadError):
+                        await request()
+                else:
+                    response = await request()
+                    assert response.status_code == {"connect": 502, "rate_limit": 429}.get(
+                        failure, 200
+                    )
+        assert len(calls) == 1
+        if failure == "observation":
+            message = calls[0]["input"][-1]
+            assert len(message["content"]) == 1
+            assert "Recorder offline" in message["content"][0]["text"]
+        if failure != "connect":
+            assert stream.closed
+
+    asyncio.run(run())
+
+
 @contextmanager
 def serve(app):
     sock = socket.socket()
@@ -176,6 +239,46 @@ def events(output, number):
         ]
     values += [{"type": "response.completed", "response": response}]
     return "".join(f"data: {json.dumps(value)}\n\n" for value in values).encode()
+
+
+def test_client_disconnect_closes_upstream_stream(tmp_path):
+    closed = threading.Event()
+
+    class WaitingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"data: first\n\n"
+            await asyncio.sleep(30)
+
+        async def aclose(self):
+            closed.set()
+
+    async def observe():
+        return sample(tmp_path)
+
+    async def upstream(request):
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=WaitingStream()
+        )
+
+    target = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    app = create_app(
+        observe=observe,
+        client=target,
+        upstream="http://fake/v1",
+        api_key="fake",
+        token="probe",
+        audit_dir=tmp_path / "audit",
+    )
+    with serve(app) as url:
+        with httpx.Client() as client:
+            with client.stream(
+                "POST",
+                url + "/responses",
+                json={"input": "test"},
+                headers={"authorization": "Bearer probe"},
+            ) as response:
+                assert next(response.iter_raw()) == b"data: first\n\n"
+        assert closed.wait(3), "Disconnect must release the upstream model connection"
 
 
 @pytest.mark.e2e

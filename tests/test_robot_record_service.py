@@ -34,7 +34,8 @@ def http_recorder(http_robot, tmp_path, request):  # noqa: F811
     output = tmp_path / "tasks"
     program = tmp_path / "recorder_service.py"
     inputs = cameras()
-    if getattr(request, "param", "current") == "full":
+    mode = getattr(request, "param", "current")
+    if mode in {"full", "full-colors"}:
         inputs = {
             role: dict(
                 format="lavfi",
@@ -43,6 +44,10 @@ def http_recorder(http_robot, tmp_path, request):  # noqa: F811
             )
             for role in ORDER
         }
+        if mode == "full-colors":
+            for role, color in zip(ORDER, ("red", "green", "blue"), strict=True):
+                size = "1920x1080" if role == "top" else "1920x1200"
+                inputs[role]["device"] = f"color=c={color}:s={size}:r=5"
     program.write_text(
         "import socket\noriginal=socket.socket\n"
         "class NoCAN(original):\n"

@@ -5,6 +5,7 @@ Keep this setup for subsequent tasks in this conversation.
 For each robot task:
 1. Call `recording` with `{"operation":"start","text":"<the user's full task>"}`.
    A fresh directory and video belong to this task. Check that it is ready.
+   If the launcher explicitly supplies a ready recording for this exact task, reuse it.
 2. Observe the cameras and joint feedback, reason about the goal, choose an action
    or concurrent pair (one per arm), execute, and observe again. Persist and
    self-correct while a reasonable correction or useful diagnostic remains available.
@@ -59,6 +60,17 @@ Write tool arguments as JSON to the request file. `observe` needs no arguments.
 Read result JSON even when the command exits nonzero: rejections are feedback.
 Display the returned absolute image paths with the available image-viewing tool.
 Do not open cameras through the underlying motor bridge; recording owns them.
+
+When initialized with automatic model observations, the environment attaches both
+arms' measured joint angles (rad), velocities (rad/s), gripper openings (0 closed,
+1 open), FK end-effector poses, and top/left-wrist/right-wrist image attachments
+before each model request during active capture. Inspect that bundle before deciding.
+It is fresh at request start, not continuously refreshed during reasoning; the cameras
+and joints are not hardware-synchronized. Missing/stale evidence is explicitly marked
+unavailable. Do not infer current state from an old image or a commanded target.
+You may request additional `observe`, `session(status)`, or image inspection whenever
+needed. After recording finishes, no current camera images are available; review the
+saved video separately. Other clients still use the explicit observation flow above.
 
 To move both arms concurrently, submit one `execute` call per arm before waiting
 for either result. With the CLI, launch both `robot-call ... execute` commands in

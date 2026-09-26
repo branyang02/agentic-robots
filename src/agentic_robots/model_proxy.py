@@ -4,9 +4,11 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from pathlib import Path
 
 import httpx2 as httpx
+from anyio import CancelScope
 from PIL import Image
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -86,12 +88,15 @@ def create_app(*, observe, client, upstream, api_key, token, audit_dir):
 
     async def forward(request: Request):
         nonlocal sequence
+        audit_path = None
         if not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {token}"):
             return JSONResponse({"error": "Invalid local model token"}, status_code=401)
         if request.headers.get("content-encoding", "identity") != "identity":
             return JSONResponse({"error": "Request compression is unsupported"}, status_code=415)
         try:
             payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Expected a model request object")
             if request.url.path == "/v1/responses" and app.state.inject:
                 try:
                     observation = await observe()
@@ -101,12 +106,14 @@ def create_app(*, observe, client, upstream, api_key, token, audit_dir):
                 inputs = payload.get("input", [])
                 if isinstance(inputs, str):
                     inputs = [{"role": "user", "content": inputs}]
+                if not isinstance(inputs, list):
+                    raise ValueError("Expected a list or text model input")
                 payload["input"] = [*inputs, message]
                 sequence += 1
+                audit["prepared_unix"] = time.time()
+                audit_path = audit_dir / f"{sequence:06d}.json"
                 # No keys, headers, base64, or unrelated conversation content in the audit.
-                (audit_dir / f"{sequence:06d}.json").write_text(
-                    json.dumps(audit, indent=2, allow_nan=False) + "\n"
-                )
+                audit_path.write_text(json.dumps(audit, indent=2, allow_nan=False) + "\n")
         except (ValueError, TypeError, OSError) as exc:
             return JSONResponse(
                 {"error": f"Cannot prepare model observation: {exc}"}, status_code=400
@@ -129,12 +136,26 @@ def create_app(*, observe, client, upstream, api_key, token, audit_dir):
         except httpx.HTTPError:
             return JSONResponse({"error": "Upstream model connection failed"}, status_code=502)
 
+        if audit_path is not None:
+            audit.update(
+                model_http_status=response.status_code,
+                model_request_id=response.headers.get("x-request-id"),
+            )
+            try:
+                audit_path.write_text(json.dumps(audit, indent=2, allow_nan=False) + "\n")
+            except OSError:
+                await response.aclose()
+                return JSONResponse(
+                    {"error": "Cannot save model observation receipt"}, status_code=500
+                )
+
         async def stream():
             try:
                 async for chunk in response.aiter_raw():
                     yield chunk
             finally:
-                await response.aclose()
+                with CancelScope(shield=True):
+                    await response.aclose()
 
         return StreamingResponse(
             stream(),
