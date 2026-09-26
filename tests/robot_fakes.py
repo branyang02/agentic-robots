@@ -63,7 +63,7 @@ class TrackingSlipArm(FakeArm):
         slip = self.slip_pending and np.max(abs(q - self.q)) > 1e-6
         super().command(q)
         if slip:
-            self.q[0] += 0.07
+            self.q[0] += 0.11
             self.slip_pending = False
 
 
@@ -78,5 +78,5 @@ class ReturnSlipArm(FakeArm):
         slip = self.slip_pending and self.q[0] > 0.05 and q[0] < self.q[0] - 1e-6
         super().command(q)
         if slip:
-            self.q[0] += 0.07
+            self.q[0] += 0.11
             self.slip_pending = False

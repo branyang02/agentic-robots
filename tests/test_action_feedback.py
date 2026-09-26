@@ -29,6 +29,21 @@ def observation():
     }
 
 
+def test_plain_observation_has_same_measured_pose_as_action_feedback():
+    obs = observation()
+    obs["arms"]["right"]["joints_rad"] = [0.1, 0.2, 0, 0, 0, 0]
+    obs["arms"]["right"]["velocity_rad_s"] = [0.01, 0.02, 0, 0, 0, 0]
+    feedback = ActionFeedback()
+    plain = feedback.measured(obs)
+    post = feedback.enrich(
+        obs, Action(arm="left", kind="joint_target", joints_rad=[0] * 6), {"status": "completed"}
+    )["post_action"]
+    assert plain == post
+    assert plain["arms"]["right"]["ee_pose"]["frame"] == "right_base"
+    assert plain["arms"]["right"]["velocity_rad_s"] == [0.01, 0.02, 0, 0, 0, 0]
+    assert plain["arms"]["right"]["gripper"]["requested_opening"] is None
+
+
 def test_fk_uses_measured_pose_and_distinguishes_incomplete_jaw_command():
     obs = observation()
     obs["arms"]["left"]["joints_rad"] = [0.2, 0, 0, 0, 0, 0]

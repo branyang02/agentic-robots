@@ -51,10 +51,11 @@ def register_robot_tools(server, bridge):
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def observe() -> CallToolResult:
-        """Return available camera images, current joints, timestamps, and per-device errors.
+        """Return cameras, measured joints/velocities/grippers, and per-device errors.
 
         The motor bridge captures available cameras on request. The recorder returns
         snapshots from an active recording; start recording first to get its images.
+        Recorder observations include FK end-effector poses in each arm's base frame.
         The agent decides whether another observation is needed.
         Does not enable motors; can run while actions are executing.
         """

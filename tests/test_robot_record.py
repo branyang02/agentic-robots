@@ -177,7 +177,9 @@ def test_completed_recordings_stay_unchanged_during_idle_calls(rollout, monkeypa
 
     observation = bridge.observe()
     assert observation["images"] == {}, "Do not pair old camera frames with live joint feedback"
-    assert observation["arms"] == current["arms"]
+    assert observation["arms"]["left"]["joints_rad"] == current["arms"]["left"]["joints_rad"]
+    assert observation["arms"]["left"]["ee_pose"] is None
+    assert "pose:left" in observation["errors"]  # Incomplete feedback is never a measured pose.
     assert "recording" in observation["errors"]
     assert bridge.session("status")["arms"] == current["arms"]
     bridge.session("stop")

@@ -5,6 +5,8 @@ Includes an observation/action bridge for Codex. The agent is the Codex conversa
 
 To run an autonomous task with camera observations, numerical actions, feedback
 corrections, and a complete video, follow [Run an agentic task](docs/agentic-runs.md).
+For API-key Codex CLI runs with automatic state and image input before each model
+request, use [robot-codex](docs/agentic-runs.md#codex-cli-with-automatic-observations).
 
 Python 3.11, uv, Ruff, pytest. Hardware uses i2rt pinned to
 `7ed46f4e4e316133a0c39aa6cf34a73d2718e850`; MCP exposes tools to the agent.
@@ -245,7 +247,7 @@ Four responsibilities remain in the bridge:
   nonadjacent bodies. This is a sampled model check, not continuous collision
   detection; furniture and the other arm are absent from the model.
 - During execution, stop advancing if feedback is unavailable/older than 150 ms
-  or joint tracking differs from the previous command by over 3°. Temperature and
+  or joint tracking differs from the previous command by over 5°. Temperature and
   velocity remain telemetry, with no independent numerical cutoff. Motor firmware
   protections and the pinned driver's checks remain unchanged.
 - Keep exclusive hardware ownership and persistent sessions, with explicit stop

@@ -685,7 +685,9 @@ class RecordingBridge:
         r = self.rollout
         try:
             images, errors = (
-                r.snapshots(after=after) if r else ({}, {"recording": "Start recording for images"})
+                r.snapshots(after=after)
+                if r and r.state == "recording"
+                else ({}, {"recording": "No active capture; start recording for current images"})
             )
         except Exception as exc:
             images, errors = {}, {"cameras": str(exc)}
@@ -702,6 +704,7 @@ class RecordingBridge:
         }
         if "error" in state:
             observation["errors"]["controller"] = state["error"]
+        observation = self.action_feedback.measured(observation)
         if r:
             try:
                 r.event("observation", observation=observation)

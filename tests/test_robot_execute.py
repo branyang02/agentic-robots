@@ -121,7 +121,7 @@ def test_unhealthy_start_is_a_control_fault(bridge):
 
 def test_tracking_failure_holds_measured_pose(bridge):
     bridge.arms["left"].frozen = True
-    result = bridge.execute(request())
+    result = bridge.execute(request(6))
     assert result["status"] == "stopped"
     assert "tracking" in result["reason"]
     assert result["hold"] == "powered hold requested"
@@ -310,7 +310,7 @@ def test_latched_fault_explains_original_failure(bridge):
 def test_tracking_stop_offers_recovery_but_does_not_allow_action_retry(bridge):
     arm = bridge.arms["left"]
     arm.frozen = True
-    stopped = bridge.execute(request())
+    stopped = bridge.execute(request(6))
     assert stopped["fault_latched"]
     assert stopped["error"]["code"] == "tracking_error"
     assert stopped["error"]["recoverable"]
@@ -339,3 +339,13 @@ def test_other_runtime_faults_do_not_offer_recovery(bridge, problem):
     assert stopped["fault_latched"]
     assert not stopped["error"]["recoverable"]
     assert not bridge.execute(request())["error"]["recoverable"]
+
+
+@pytest.mark.parametrize("degrees,status", [(4.9, "completed"), (5.1, "stopped")])
+def test_five_degree_tracking_boundary(bridge, degrees, status):
+    bridge.arms["left"].frozen = True
+    result = bridge.execute(request(degrees))
+    assert result["status"] == status
+    if status == "stopped":
+        assert result["error"]["code"] == "tracking_error"
+        assert result["error"]["details"]["maximum_error_rad"] == pytest.approx(np.deg2rad(5))

@@ -14,8 +14,8 @@ class ActionFeedback:
         self.motion = None
         self.lock = threading.Lock()
 
-    def enrich(self, observation, action, result):
-        """Compute FK from fresh measured joints, not the requested endpoint."""
+    def measured(self, observation):
+        """Compute FK from fresh measured joints for any recorder observation."""
         observation = copy.deepcopy(observation)
         errors = observation.setdefault("errors", {})
         for side in ("left", "right"):
@@ -31,20 +31,6 @@ class ActionFeedback:
                 "command_status": None,
                 "interrupted": False,
             }
-            if side == action.arm and action.kind == "gripper_target":
-                gripper = arm["gripper"]
-                gripper.update(
-                    requested_opening=action.gripper_opening,
-                    command_status=result["status"],
-                    interrupted=result["status"] == "stopped",
-                )
-                measured = arm.get("gripper_opening")
-                if (
-                    measured is not None
-                    and np.isfinite(measured)
-                    and action.gripper_opening is not None
-                ):
-                    gripper["opening_error"] = measured - action.gripper_opening
             try:
                 Bridge.healthy(arm)
                 opening = float(vector([arm["gripper_opening"]], 1)[0])
@@ -60,6 +46,27 @@ class ActionFeedback:
                 }
             except Exception as exc:
                 errors[f"pose:{side}"] = str(exc)
+        return observation
+
+    def enrich(self, observation, action, result):
+        """Add action-specific gripper outcome and diagnostics to measured feedback."""
+        observation = self.measured(observation)
+        errors = observation["errors"]
+        arm = observation.get("arms", {}).get(action.arm)
+        if arm is not None and action.kind == "gripper_target":
+            gripper = arm["gripper"]
+            gripper.update(
+                requested_opening=action.gripper_opening,
+                command_status=result["status"],
+                interrupted=result["status"] == "stopped",
+            )
+            measured = arm.get("gripper_opening")
+            if (
+                measured is not None
+                and np.isfinite(measured)
+                and action.gripper_opening is not None
+            ):
+                gripper["opening_error"] = measured - action.gripper_opening
 
         error = result.get("error", {})
         message = error.get("message", result.get("reason", "Inspect execution feedback"))

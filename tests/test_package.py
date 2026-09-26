@@ -32,7 +32,7 @@ assert not any(n == "scripts" or n.startswith("scripts.") for n in sys.modules)
 prompt = importlib.resources.files("agentic_robots").joinpath("robot_agent.md").read_text()
 assert "joint_target" in prompt and "recording" in prompt
 commands = importlib.metadata.distribution("agentic-robots").entry_points
-assert len(commands) == 8
+assert len(commands) == 9
 for command in commands:
     assert command.group == "console_scripts"
     assert command.module.startswith("scripts.") and command.attr == "main"
@@ -44,7 +44,7 @@ for command in commands:
     else:
         raise AssertionError(command.name + " did not exit after help")
 assert not accesses
-print("Installed library, packaged prompt, and 8 CLI commands passed")
+print("Installed library, packaged prompt, and 9 CLI commands passed")
 """,
         ],
         cwd=tmp_path,
@@ -53,4 +53,4 @@ print("Installed library, packaged prompt, and 8 CLI commands passed")
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "8 CLI commands passed" in result.stdout
+    assert "9 CLI commands passed" in result.stdout
